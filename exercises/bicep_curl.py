@@ -1,236 +1,270 @@
-# exercises/bicep_curl.py
-import cv2
-import mediapipe as mp
-import numpy as np 
+"""
+Visual Bicep Curl AI Trainer - WebRTC friendly
+----------------------------------------------
+- Tracks elbow angles for curls
+- Counts reps
+- Gives feedback on form
+- Works with streamlit-webrtc
+"""
+
+from dataclasses import dataclass
+from collections import deque
 import time
+import argparse
+import cv2
+import numpy as np
+import mediapipe as mp
+from mediapipe.framework.formats import landmark_pb2
+from utils.angle_calculator import angle_3pts,moving_average
+import av
 
-def angle_3pts(a, b, c):
-    """
-    Calculate angle (in degrees) between three points:
-    a, b, c are [x, y] coordinates.
-    Angle at point b (between vectors BA and BC).
-    """
-    a = np.array(a)
-    b = np.array(b)
-    c = np.array(c)
+# =========================
+# Config
+# =========================
+@dataclass
+class Config:
+    elbow_min_deg: float = 30.0    # fully flexed
+    elbow_max_deg: float = 160.0   # arm straight
+    smoothing_win: int = 5
+    bottom_hold_ms: int = 150
+    fps_smoothing: int = 20
 
-    ba = a - b
-    bc = c - b
+CFG = Config()
 
-    cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
-    angle = np.degrees(np.arccos(cosine_angle))
+# =========================
+# Pose helpers
+# =========================
+mp_drawing = mp.solutions.drawing_utils
+mp_pose = mp.solutions.pose
+LMS = mp_pose.PoseLandmark
 
-    return angle
+KEYS = {
+    'l_shoulder': LMS.LEFT_SHOULDER,
+    'r_shoulder': LMS.RIGHT_SHOULDER,
+    'l_elbow': LMS.LEFT_ELBOW,
+    'r_elbow': LMS.RIGHT_ELBOW,
+    'l_wrist': LMS.LEFT_WRIST,
+    'r_wrist': LMS.RIGHT_WRIST,
+}
 
-class BicepCurlEvaluator:
-    def __init__(self, cfg=None):
-        self.cfg = cfg or {}
-        self.min_angle = self.cfg.get("min_angle", 30)   # fully curled
-        self.max_angle = self.cfg.get("max_angle", 160)  # fully extended
-        self.counter = 0 
-        self.stage = None
-        self.feedback = "Start curling..."
-        self.prev_time = time.time()
-        self.rep_start_time = None
-        self.rep_times = []
-        
-        # MediaPipe setup
-        self.mp_pose = mp.solutions.pose
-        self.pose = self.mp_pose.Pose(
-            min_detection_confidence=self.cfg.get("min_detection_confidence", 0.8),
-            min_tracking_confidence=self.cfg.get("min_tracking_confidence", 0.8)
-        )
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.mp_drawing_styles = mp.solutions.drawing_styles
+def get_point(landmarks, name, w, h):
+    lid = KEYS[name].value
+    lm = landmarks[lid]
+    return int(lm.x*w), int(lm.y*h), lm.visibility
 
-    def get_landmark_coordinates(self, landmarks, landmark_type):
-        """Safely get landmark coordinates with visibility check"""
-        landmark = landmarks[landmark_type]
-        if landmark.visibility < 0.7:  # Not visible enough
-            return None
-        return [landmark.x, landmark.y]
+# =========================
+# BicepEvaluator
+# =========================
+class BicepEvaluator:
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.left_elbow_hist = deque(maxlen=cfg.smoothing_win)
+        self.right_elbow_hist = deque(maxlen=cfg.smoothing_win)
+        self.state = 'down'  # 'down' -> 'up'
+        self.bottom_timestamp = 0
+        self.rep_count = 0
+        self.last_feedback = ""
+        self.fps_hist = deque(maxlen=cfg.fps_smoothing)
 
-    def process(self, frame):
-        # Calculate FPS
-        curr_time = time.time()
-        fps = 1 / (curr_time - self.prev_time) if curr_time - self.prev_time > 0 else 0
-        self.prev_time = curr_time
-        
-        # Process frame with MediaPipe
-        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        image.flags.writeable = False
-        results = self.pose.process(image)
-        image.flags.writeable = True
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        
-        # Display FPS
-        cv2.putText(image, f'FPS: {int(fps)}', (500, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+    def update_fps(self, fps):
+        self.fps_hist.append(fps)
 
-        # Extract landmarks if available
-        if results.pose_landmarks:
-            landmarks = results.pose_landmarks.landmark
-            
-            # Get coordinates for left arm
-            left_shoulder = self.get_landmark_coordinates(landmarks, self.mp_pose.PoseLandmark.LEFT_SHOULDER)
-            left_elbow = self.get_landmark_coordinates(landmarks, self.mp_pose.PoseLandmark.LEFT_ELBOW)
-            left_wrist = self.get_landmark_coordinates(landmarks, self.mp_pose.PoseLandmark.LEFT_WRIST)
-            
-            # Get coordinates for right arm
-            right_shoulder = self.get_landmark_coordinates(landmarks, self.mp_pose.PoseLandmark.RIGHT_SHOULDER)
-            right_elbow = self.get_landmark_coordinates(landmarks, self.mp_pose.PoseLandmark.RIGHT_ELBOW)
-            right_wrist = self.get_landmark_coordinates(landmarks, self.mp_pose.PoseLandmark.RIGHT_WRIST)
-            
-            # Calculate angles if we have all required points
-            left_angle = None
-            right_angle = None
-            
-            if all([left_shoulder, left_elbow, left_wrist]):
-                left_angle = angle_3pts(left_shoulder, left_elbow, left_wrist)
-                
-            if all([right_shoulder, right_elbow, right_wrist]):
-                right_angle = angle_3pts(right_shoulder, right_elbow, right_wrist)
-            
-            # Only proceed if we have at least one valid angle
-            if left_angle is not None or right_angle is not None:
-                # Use the available angle(s)
-                if left_angle is not None and right_angle is not None:
-                    # Both arms available - use the average
-                    angle = (left_angle + right_angle) / 2
-                    angle_diff = abs(left_angle - right_angle)
-                elif left_angle is not None:
-                    angle = left_angle
-                    angle_diff = 0
-                else:
-                    angle = right_angle
-                    angle_diff = 0
-                
-                # Visualize angles
-                if left_angle is not None:
-                    elbow_pos = tuple(np.multiply(left_elbow, [image.shape[1], image.shape[0]]).astype(int))
-                    cv2.putText(image, f"L:{int(left_angle)}", elbow_pos,
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
-                
-                if right_angle is not None:
-                    elbow_pos = tuple(np.multiply(right_elbow, [image.shape[1], image.shape[0]]).astype(int))
-                    cv2.putText(image, f"R:{int(right_angle)}", elbow_pos,
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
-                
-                # Curl counter logic + posture correction
-                if angle > self.max_angle:
-                    if self.stage != "down":
-                        self.stage = "down"
-                        if self.rep_start_time:
-                            rep_time = time.time() - self.rep_start_time
-                            self.rep_times.append(rep_time)
-                            self.rep_start_time = None
-                    
-                    # Check for symmetry if both arms are available
-                    if left_angle is not None and right_angle is not None and angle_diff > 10:
-                        if left_angle < right_angle:
-                            self.feedback = "Raise your left arm slightly ⬆"
-                        else:
-                            self.feedback = "Raise your right arm slightly ⬆"
-                    else:
-                        self.feedback = "Good to start"
-                
-                elif angle < self.min_angle:
-                    if self.stage == "down":
-                        self.stage = "up"
-                        self.counter += 1
-                        self.rep_start_time = time.time()
-                        self.feedback = "Perfect!"
-                    else:
-                        self.feedback = "Lower your arms first ⬇"
-                
-                elif self.stage == "down" and angle <= self.max_angle:
-                    self.feedback = "Curl higher ⬆"
-                
-                elif self.stage == "up" and angle >= self.min_angle:
-                    self.feedback = "Lower slowly ⬇"
-        
-        # Calculate average rep time
-        if self.rep_times:
-            avg_rep_time = sum(self.rep_times) / len(self.rep_times)
+    def eval_and_draw(self, frame, landmarks):
+        h, w = frame.shape[:2]
+        pts = {}
+        for k in KEYS.keys():
+            x,y,vis = get_point(landmarks, k, w, h)
+            pts[k] = (x,y,vis)
+
+        # Visibility check
+        needed = ['l_shoulder','r_shoulder','l_elbow','r_elbow','l_wrist','r_wrist']
+        if any(pts[k][2] < 0.5 for k in needed):
+            cv2.putText(frame, "Move into frame fully", (20,40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255),2)
+            return frame
+
+        P = {k:(pts[k][0], pts[k][1]) for k in pts}
+
+        # Elbow angles
+        lk = angle_3pts(P['l_shoulder'], P['l_elbow'], P['l_wrist'])
+        rk = angle_3pts(P['r_shoulder'], P['r_elbow'], P['r_wrist'])
+
+        if lk is not None:
+            self.left_elbow_hist.append(lk)
+        if rk is not None:
+            self.right_elbow_hist.append(rk)
+
+        lk_s = moving_average(self.left_elbow_hist)
+        rk_s = moving_average(self.right_elbow_hist)
+
+        # State machine for rep counting
+        now = int(time.time()*1000)
+        if self.state == 'down':
+            if lk_s is not None and rk_s is not None and lk_s <= self.cfg.elbow_min_deg and rk_s <= self.cfg.elbow_min_deg:
+                self.state = 'up_candidate'
+                self.bottom_timestamp = now
+        elif self.state == 'up_candidate':
+            if lk_s <= self.cfg.elbow_min_deg and rk_s <= self.cfg.elbow_min_deg and (now - self.bottom_timestamp) >= self.cfg.bottom_hold_ms:
+                self.state = 'up'
+        elif self.state == 'up':
+            if lk_s >= self.cfg.elbow_max_deg and rk_s >= self.cfg.elbow_max_deg:
+                self.rep_count += 1
+                self.state = 'down'
         else:
-            avg_rep_time = 0
-        
-        # Setup status box
-        cv2.rectangle(image, (0, 0), (350, 140), (245, 117, 16), -1)
-        
-        # Rep data
-        cv2.putText(image, 'REPS', (15, 25), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1, cv2.LINE_AA)
-        cv2.putText(image, str(self.counter), 
-                    (15, 80), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 2, cv2.LINE_AA)
-        
-        # Stage data
-        cv2.putText(image, 'STAGE', (120, 25), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1, cv2.LINE_AA)
-        cv2.putText(image, self.stage if self.stage else "-", 
-                    (120, 80), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 2, cv2.LINE_AA)
-        
-        # Average rep time
-        cv2.putText(image, 'AVG TIME', (230, 25), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
-        cv2.putText(image, f"{avg_rep_time:.1f}s", 
-                    (230, 80), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
-        
-        # Feedback message
-        color = (0, 255, 0) if "Perfect!" in self.feedback or "Good" in self.feedback else (0, 0, 255)
-        cv2.putText(image, self.feedback, (10, 130), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
-        
-        # Render detections
-        if results.pose_landmarks:
-            self.mp_drawing.draw_landmarks(
-                image, 
-                results.pose_landmarks, 
-                self.mp_pose.POSE_CONNECTIONS,
-                self.mp_drawing.DrawingSpec(color=(245, 117, 66), thickness=2, circle_radius=2), 
-                self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2)
-            )
-        
-        return image
+            self.state = 'down'
 
-    def reset(self):
-        """Reset the evaluator to initial state"""
-        self.counter = 0
-        self.stage = None
-        self.feedback = "Start curling..."
-        self.rep_times = []
-        self.rep_start_time = None
+        # Feedback
+        feedback = []
+        if lk_s is not None and rk_s is not None:
+            if lk_s > self.cfg.elbow_max_deg or rk_s > self.cfg.elbow_max_deg:
+                feedback.append("Lower arms more")
+            elif lk_s < self.cfg.elbow_min_deg or rk_s < self.cfg.elbow_min_deg:
+                feedback.append("Don't overflex elbows")
 
+        if not feedback:
+            feedback_text = "Good Curl"
+            feedback_color = (0,200,0)
+        else:
+            feedback_text = " | ".join(feedback)
+            feedback_color = (0,0,255)
+        self.last_feedback = feedback_text
 
-def main():
-    cap = cv2.VideoCapture(0)
-    evaluator = BicepCurlEvaluator()
+        # ============== Drawing ==============
+        # Skeleton
+        mp_drawing.draw_landmarks(
+            image=frame,
+            landmark_list=landmark_pb2.NormalizedLandmarkList(
+                landmark=[landmark_pb2.NormalizedLandmark(x=lm.x, y=lm.y, z=lm.z, visibility=lm.visibility)
+                          for lm in landmarks]
+            ),
+            connections=mp_pose.POSE_CONNECTIONS,
+            landmark_drawing_spec=mp_drawing.DrawingSpec(color=(255,255,255), thickness=2, circle_radius=2),
+            connection_drawing_spec=mp_drawing.DrawingSpec(color=(180,180,180), thickness=2)
+        )
 
-    while cap.isOpened():
+        # Elbow angles
+        def draw_elbow(label, shoulder, elbow, wrist, ang_val, is_left=True):
+            color = (0,200,0)
+            if ang_val is None:
+                color = (0,0,255)
+            elif ang_val < CFG.elbow_min_deg or ang_val > CFG.elbow_max_deg:
+                color = (0,0,255)
+            cv2.line(frame, shoulder, elbow, color,3)
+            cv2.line(frame, elbow, wrist, color,3)
+            tx = elbow[0]-40 if is_left else elbow[0]+10
+            ty = elbow[1]-10
+            txt = f"{label}: --" if ang_val is None else f"{label}: {ang_val:.0f}"
+            cv2.putText(frame, txt, (tx,ty), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color,2)
+
+        draw_elbow('L_elbow', P['l_shoulder'], P['l_elbow'], P['l_wrist'], lk_s, True)
+        draw_elbow('R_elbow', P['r_shoulder'], P['r_elbow'], P['r_wrist'], rk_s, False)
+
+        # Status panel
+        panel = np.zeros((110, w,3), dtype=np.uint8)
+        panel[:] = (25,25,25)
+        ok = (0,200,0)
+        bad = (0,0,255)
+        white = (255,255,255)
+
+        def flag(x, y, text, good=True):
+            col = ok if good else bad
+            cv2.circle(panel, (x,y), 8, col,-1)
+            cv2.putText(panel,text,(x+15,y+5),cv2.FONT_HERSHEY_SIMPLEX,0.6,white,2)
+
+        left_ok = lk_s is not None and CFG.elbow_min_deg <= lk_s <= CFG.elbow_max_deg
+        right_ok = rk_s is not None and CFG.elbow_min_deg <= rk_s <= CFG.elbow_max_deg
+
+        flag(20,25,'L_elbow', left_ok)
+        flag(20,55,'R_elbow', right_ok)
+        cv2.putText(panel, f"Reps: {self.rep_count}", (460,60), cv2.FONT_HERSHEY_SIMPLEX,0.8,(180,255,180),2)
+        cv2.putText(panel, self.last_feedback, (20,95), cv2.FONT_HERSHEY_SIMPLEX,0.7, feedback_color,2)
+
+        # FPS
+        fps_avg = moving_average(self.fps_hist)
+        if fps_avg is not None:
+            cv2.putText(panel, f"FPS: {fps_avg:.1f}", (w-120,25), cv2.FONT_HERSHEY_SIMPLEX,0.6,(180,180,255),2)
+
+        frame = np.vstack([panel, frame])
+        return frame
+
+# =========================
+# Globals for web callback
+# =========================
+pose = mp_pose.Pose(min_detection_confidence=0.6,
+                    min_tracking_confidence=0.6,
+                    model_complexity=1,
+                    smooth_landmarks=True)
+
+# -------------------------
+# Callback
+# -------------------------
+def bicep_callback(frame: av.VideoFrame):
+    global _prev_time
+
+    img = frame.to_ndarray(format="bgr24")
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    res = pose.process(rgb)
+
+    if res.pose_landmarks:
+        landmarks = res.pose_landmarks.landmark
+        img, reps, feedback = BicepEvaluator.process(img, landmarks)
+    else:
+        reps, feedback = 0, "No person detected"
+        cv2.putText(img, feedback, (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+    # FPS calc
+    now = time.time()
+    fps = 1.0 / max(1e-6, now - _prev_time)
+    _prev_time = now
+    cv2.putText(img, f"FPS: {fps:.1f}", (10, 60),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (180, 180, 255), 2)
+
+    return av.VideoFrame.from_ndarray(img, format="bgr24"), {reps, feedback}
+# =========================
+# Desktop runner
+# =========================
+def run(src=0):
+    cap = cv2.VideoCapture(src)
+    if not cap.isOpened():
+        raise SystemExit(f"Cannot open video source: {src}")
+
+    evaluator = BicepEvaluator(CFG)
+    prev_time = time.time()
+
+    while True:
         ret, frame = cap.read()
-        if not ret or frame is None:
+        if not ret:
             break
+        new_w = 960
+        frame = cv2.resize(frame, (new_w, int(new_w*(frame.shape[0]/frame.shape[1]))))
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        res = pose.process(rgb)
+        if res.pose_landmarks:
+            frame = evaluator.eval_and_draw(frame, res.pose_landmarks.landmark)
+        else:
+            cv2.putText(frame, 'No person detected', (20,40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255),2)
 
-        frame = evaluator.process(frame)
-        
-        # Add reset instruction
-        cv2.putText(frame, "Press 'r' to reset count", (10, frame.shape[0] - 10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        
-        cv2.imshow('AI Gym Trainer - Bicep Curls', frame)
+        now = time.time()
+        fps = 1.0 / max(1e-6, now - prev_time)
+        prev_time = now
+        evaluator.update_fps(fps)
 
-        key = cv2.waitKey(10) & 0xFF
-        if key == ord('q'):
+        cv2.imshow('Bicep Curl AI Trainer', frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-        elif key == ord('r'):
-            evaluator.reset()
-
     cap.release()
     cv2.destroyAllWindows()
 
-
-if __name__ == "__main__":
-    main()
+# =========================
+# CLI
+# =========================
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--src', default='0')
+    args = parser.parse_args()
+    try:
+        src = int(args.src)
+    except ValueError:
+        src = args.src
+    run(src)

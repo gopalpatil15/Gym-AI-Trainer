@@ -1,67 +1,21 @@
 """
-Visual Squat AI Trainer
------------------------
-- Live webcam (or video file) posture overlay
-- Shoulder level check
-- Knee angles (hip–knee–ankle) with color-coding
-- Torso (shoulder line) parallel-to-ground check
-- Shoulder symmetry (both sides travel equally)
-- Rep counter with bottom detection using knee angle + hip depth
-- On-screen status panel and per-joint annotations
-
-Usage:
-  python squat.py                         # webcam
-  python squat.py --src path/to/video.mp4
-
-Install deps:
-  pip install opencv-python mediapipe numpy
+Visual Squat AI Trainer - WebRTC friendly
+-----------------------------------------
+- Keeps original logic (angles, feedback, rep counting, drawing)
+- Adds squat_callback(frame) for streamlit-webrtc
+- Keeps run() so desktop/testing still works
 """
 
 from dataclasses import dataclass
-import math
 import time
 import argparse
 from collections import deque
-
+import av
 import cv2
 import numpy as np
 import mediapipe as mp
 from mediapipe.framework.formats import landmark_pb2
-
-
-def angle_3pts(a, b, c):
-    """
-    Calculate angle (in degrees) between three points:
-    a, b, c are [x, y] coordinates.
-    Angle at point b (between vectors BA and BC).
-    """
-    a = np.array(a)
-    b = np.array(b)
-    c = np.array(c)
-
-    ba = a - b
-    bc = c - b
-
-    cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
-    angle = np.degrees(np.arccos(cosine_angle))
-
-    return angle
-
-def line_angle_deg(a, b):
-    """
-    Calculate angle of line AB w.r.t horizontal (in degrees).
-    """
-    a = np.array(a)
-    b = np.array(b)
-    delta = b - a
-    return np.degrees(np.arctan2(delta[1], delta[0]))
-
-
-def moving_average(seq):
-    if not seq:
-        return None
-    return sum(seq) / len(seq)
-
+from utils.angle_calculator import angle_3pts, line_angle_deg, moving_average
 
 # =========================
 # Configuration
@@ -85,7 +39,7 @@ class Config:
 CFG = Config()
 
 # =========================
-# Pose Helpers
+# Pose Helpers & Keys
 # =========================
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
@@ -109,7 +63,7 @@ def get_point(landmarks, name, w, h):
     return int(lm.x * w), int(lm.y * h), lm.visibility
 
 # =========================
-# Visual Squat Evaluator
+# Visual Squat Evaluator (kept intact)
 # =========================
 class SquatEvaluator:
     def __init__(self, cfg: Config):
@@ -335,18 +289,28 @@ class SquatEvaluator:
         frame = np.vstack([panel, frame])
         return frame
 
+
 # =========================
-# Runner
+# Globals for web callback
+# =========================
+# Pose instance shared across frames (keeps tracking)
+pose = mp_pose.Pose(min_detection_confidence=0.6,
+                    min_tracking_confidence=0.6,
+                    model_complexity=1,
+                    smooth_landmarks=True)
+
+drawer = mp_drawing
+squat_evaluator = SquatEvaluator(CFG)
+_prev_time = time.time()
+
+
+# =========================
+# Runner (desktop) - unchanged behaviour
 # =========================
 def run(src=0):
     cap = cv2.VideoCapture(src)
     if not cap.isOpened():
         raise SystemExit(f"Cannot open video source: {src}")
-
-    pose = mp_pose.Pose(min_detection_confidence=0.6,
-                        min_tracking_confidence=0.6,
-                        model_complexity=1,
-                        smooth_landmarks=True)
 
     evaluator = SquatEvaluator(CFG)
     prev_time = time.time()
@@ -383,12 +347,49 @@ def run(src=0):
     cap.release()
     cv2.destroyAllWindows()
 
+
+# =========================
+# WebRTC callback: use this in streamlit-webrtc
+# =========================
+def squat_callback(frame):
+    """
+    frame: an av.VideoFrame provided by streamlit-webrtc.
+    Returns (av.VideoFrame, dict) -> annotated frame + metadata.
+    """
+    global _prev_time
+    img = frame.to_ndarray(format="bgr24")
+
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    res = pose.process(rgb)
+
+    if res.pose_landmarks:
+        landmarks = res.pose_landmarks.landmark
+        img = squat_evaluator.eval_and_draw(img, landmarks)
+    else:
+        cv2.putText(img, 'No person detected', (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+
+    # FPS update
+    now = time.time()
+    fps = 1.0 / max(1e-6, (now - _prev_time))
+    _prev_time = now
+    squat_evaluator.update_fps(fps)
+
+    # Metadata for UI
+    status = {
+        "reps": squat_evaluator.rep_count,
+        "feedback": squat_evaluator.last_feedback,
+        "fps": fps
+    }
+
+    return av.VideoFrame.from_ndarray(img, format="bgr24"), status
+
+# If you want to run as a script locally:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--src', default='0', help="0 for webcam, or path/URL to video")
     args = parser.parse_args()
     try:
-        # try to parse numeric webcam index
         src = int(args.src)
     except ValueError:
         src = args.src

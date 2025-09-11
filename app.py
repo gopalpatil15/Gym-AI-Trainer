@@ -1,859 +1,680 @@
-# app.py
-import os
-import time
-import tempfile
-import cv2
-import numpy as np
 import streamlit as st
+from streamlit_webrtc import webrtc_streamer
+import av
+import time
+import random
+import datetime
 
-# Optional Lottie (safe import)
-try:
-    from streamlit_lottie import st_lottie
-    import requests
-except Exception:
-    st_lottie = None
-    requests = None
+# Import your exercise callbacks
+from exercises.bicep_curl import bicep_callback
+from exercises.squat import squat_callback
+from exercises.pushup import pushup_callback
+from exercises.plank import plank_callback
+from exercises.standing_cable_press import cable_press_callback
 
-# ===== Import your exercise evaluators =====
-# Make sure your project has: exercises/__init__.py
-# and the following modules/classes implemented.
-from exercises.squat import SquatEvaluator, CFG
-from exercises.pushup import PushupEvaluator
-from exercises.plank import PlankEvaluator
-from exercises.bicep_curl import BicepCurlEvaluator
-from exercises.standig_chest_press import ChestPressEvaluator
-
-# -------------------------------------------------------------------
-# Page config
-# -------------------------------------------------------------------
+# Page configuration
 st.set_page_config(
-    page_title="NEXUS GYM AI",
-    page_icon="🧿",
+    page_title="KSIHU MERA LAAL KAREGA KAMAL",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# -------------------------------------------------------------------
-# Theme Management
-# -------------------------------------------------------------------
-if 'theme' not in st.session_state:
-    st.session_state.theme = "dark"  # Default to dark theme
-
-def toggle_theme():
-    if st.session_state.theme == "dark":
-        st.session_state.theme = "light"
-    else:
-        st.session_state.theme = "dark"
-
-# -------------------------------------------------------------------
-# Camera Management
-# -------------------------------------------------------------------
-if 'camera_index' not in st.session_state:
-    st.session_state.camera_index = 0  # Default to back camera
-
-def get_available_cameras():
-    """Check available cameras and return list of indices"""
-    available_cameras = []
-    for i in range(0, 3):  # Check first 3 cameras
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
-            available_cameras.append(i)
-            cap.release()
-    return available_cameras
-
-# -------------------------------------------------------------------
-# Responsive Design CSS
-# -------------------------------------------------------------------
-def get_css(theme):
-    dark_css = """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800&family=Exo+2:wght@300;400;500;600;700&display=swap');
-
-    :root {
-      --card-bg: rgba(10, 10, 42, 0.6);
-      --border: rgba(90, 70, 255, 0.3);
-      --glow: rgba(90, 70, 255, 0.3);
-      --text-dim: #a0a0ff;
-      --text-main: #ffffff;
-      --gradient-start: #4a3aff;
-      --gradient-end: #6e45e2;
-      --bg-primary: #000000;
-      --bg-secondary: #0a0a2a;
-    }
-
-    .main { background: linear-gradient(135deg, var(--bg-primary), var(--bg-secondary), var(--bg-primary)); color: var(--text-main); }
-    .stApp { background: linear-gradient(152deg, var(--bg-primary) 0%, var(--bg-secondary) 50%, var(--bg-primary) 100%); color: var(--text-main); font-family: 'Exo 2', sans-serif; }
-
-    .header {
-      background: linear-gradient(90deg, rgba(10,10,42,0.7) 0%, rgba(20,0,80,0.7) 100%);
-      backdrop-filter: blur(10px);
-      border-bottom: 1px solid var(--border);
-      box-shadow: 0 0 30px var(--glow);
-      padding: 1rem 2rem; border-radius: 0 0 20px 20px; margin-bottom: 2rem;
-    }
-
-    .control-panel, .metrics-panel, .feedback-panel {
-      background: var(--card-bg);
-      backdrop-filter: blur(10px);
-      border: 1px solid var(--border);
-      border-radius: 20px; padding: 1.5rem; margin-bottom: 2rem;
-      box-shadow: 0 0 30px var(--glow);
-    }
-
-    .stButton>button {
-      background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
-      color: white; border: none; border-radius: 15px;
-      padding: 0.75rem 1.5rem; font-family: 'Orbitron', sans-serif;
-      font-weight: 600; font-size: 1rem; transition: all 0.3s ease; width: 100%;
-      box-shadow: 0 0 15px rgba(74, 58, 255, 0.5);
-    }
-    .stButton>button:hover {
-      background: linear-gradient(135deg, var(--gradient-end), var(--gradient-start));
-      transform: translateY(-3px);
-      box-shadow: 0 0 25px rgba(74, 58, 255, 0.8);
-    }
-
-    .stSelectbox>div>div, .stRadio>div {
-      background: rgba(16,18,37,0.6) !important;
-      border: 1px solid rgba(90,70,255,0.5) !important;
-      border-radius: 12px !important;
-      color: white !important;
-      padding: 6px;
-    }
-
-    .exercise-card {
-      background: rgba(16,18,37,0.4);
-      border-radius: 15px; padding: 1rem; margin: 0.5rem 0;
-      border: 1px solid var(--border);
-      box-shadow: 0 0 20px rgba(90, 70, 255, 0.1);
-      transition: all 0.3s ease; cursor: pointer; text-align: left;
-    }
-    .exercise-card.selected {
-      background: rgba(16,18,37,0.7);
-      transform: translateY(-2px);
-      box-shadow: 0 0 30px rgba(90, 70, 255, 0.3);
-      border: 1px solid rgba(90,70,255,0.7);
-    }
-
-    .metric {
-      background: rgba(16,18,37,0.4);
-      border-radius: 15px; padding: 1rem; text-align: center;
-      border: 1px solid var(--border); margin: 0.5rem;
-    }
-    .metric-value {
-      font-family: 'Orbitron', sans-serif; font-size: 2rem;
-      background: linear-gradient(135deg, var(--gradient-end), var(--gradient-start));
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      margin: 0.5rem 0;
-    }
-    .metric-label { font-size: 0.9rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
-
-    .feedback-text {
-      font-family: 'Exo 2', sans-serif; font-size: 1.1rem; text-align: center;
-      background: linear-gradient(135deg, var(--gradient-end), var(--gradient-start));
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 600;
-    }
-
-    .video-container {
-      border-radius: 20px; overflow: hidden;
-      box-shadow: 0 0 30px var(--glow);
-      border: 1px solid rgba(90,70,255,0.5);
-      margin-bottom: 1.5rem;
-    }
-
-    h1, h2, h3 {
-      font-family: 'Orbitron', sans-serif;
-      background: linear-gradient(135deg, var(--gradient-end), var(--gradient-start));
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      text-shadow: 0 0 10px rgba(74,58,255,0.5);
-    }
-
-    .divider { height: 1px; background: linear-gradient(90deg, transparent, rgba(90,70,255,0.5), transparent); margin: 2rem 0; }
-    .footer { text-align: center; padding: 1rem; margin-top: 1rem; font-size: 0.8rem; color: var(--text-dim); }
-    
-    .theme-switch {
-      position: relative;
-      display: inline-block;
-      width: 60px;
-      height: 34px;
-    }
-    
-    .theme-switch input { 
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
-    
-    .slider {
-      position: absolute;
-      cursor: pointer;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background-color: #0a0a2a;
-      transition: .4s;
-      border-radius: 34px;
-      border: 1px solid rgba(90,70,255,0.5);
-    }
-    
-    .slider:before {
-      position: absolute;
-      content: "";
-      height: 26px;
-      width: 26px;
-      left: 4px;
-      bottom: 3px;
-      background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
-      transition: .4s;
-      border-radius: 50%;
-    }
-    
-    input:checked + .slider {
-      background-color: #f0f0f0;
-    }
-    
-    input:checked + .slider:before {
-      transform: translateX(26px);
-      background: linear-gradient(135deg, #ffcc00, #ff9500);
-    }
-
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(74, 58, 255, 0.7); }
-      70% { box-shadow: 0 0 0 15px rgba(74, 58, 255, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(74, 58, 255, 0); }
-    }
-    .pulse { animation: pulse 2s infinite; }
-    
-    /* Mobile Responsiveness */
-    @media (max-width: 768px) {
-      .header {
-        padding: 0.75rem 1rem;
-        margin-bottom: 1rem;
-      }
-      
-      .control-panel, .metrics-panel, .feedback-panel {
-        padding: 1rem;
-        margin-bottom: 1.5rem;
-      }
-      
-      .metric {
-        padding: 0.75rem;
-        margin: 0.25rem;
-      }
-      
-      .metric-value {
-        font-size: 1.5rem;
-      }
-      
-      h1 {
-        font-size: 1.75rem;
-      }
-      
-      h2 {
-        font-size: 1.25rem;
-      }
-      
-      h3 {
-        font-size: 1.1rem;
-      }
-      
-      .stButton>button {
-        padding: 0.5rem 1rem;
-        font-size: 0.9rem;
-      }
-    }
-    </style>
-    """
-    
-    light_css = """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800&family=Exo+2:wght@300;400;500;600;700&display=swap');
-
-    :root {
-      --card-bg: rgba(255, 255, 255, 0.8);
-      --border: rgba(90, 70, 255, 0.2);
-      --glow: rgba(90, 70, 255, 0.1);
-      --text-dim: #4a4a8a;
-      --text-main: #0a0a2a;
-      --gradient-start: #6e45e2;
-      --gradient-end: #4a3aff;
-      --bg-primary: #f0f0ff;
-      --bg-secondary: #d6d6f0;
-    }
-
-    .main { background: linear-gradient(135deg, var(--bg-primary), var(--bg-secondary), var(--bg-primary)); color: var(--text-main); }
-    .stApp { background: linear-gradient(152deg, var(--bg-primary) 0%, var(--bg-secondary) 50%, var(--bg-primary) 100%); color: var(--text-main); font-family: 'Exo 2', sans-serif; }
-
-    .header {
-      background: linear-gradient(90deg, rgba(255,255,255,0.7) 0%, rgba(200,200,255,0.7) 100%);
-      backdrop-filter: blur(10px);
-      border-bottom: 1px solid var(--border);
-      box-shadow: 0 0 30px var(--glow);
-      padding: 1rem 2rem; border-radius: 0 0 20px 20px; margin-bottom: 2rem;
-    }
-
-    .control-panel, .metrics-panel, .feedback-panel {
-      background: var(--card-bg);
-      backdrop-filter: blur(10px);
-      border: 1px solid var(--border);
-      border-radius: 20px; padding: 1.5rem; margin-bottom: 2rem;
-      box-shadow: 0 0 30px var(--glow);
-    }
-
-    .stButton>button {
-      background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
-      color: white; border: none; border-radius: 15px;
-      padding: 0.75rem 1.5rem; font-family: 'Orbitron', sans-serif;
-      font-weight: 600; font-size: 1rem; transition: all 0.3s ease; width: 100%;
-      box-shadow: 0 0 15px rgba(110, 69, 226, 0.3);
-    }
-    .stButton>button:hover {
-      background: linear-gradient(135deg, var(--gradient-end), var(--gradient-start));
-      transform: translateY(-3px);
-      box-shadow: 0 0 25px rgba(110, 69, 226, 0.4);
-    }
-
-    .stSelectbox>div>div, .stRadio>div {
-      background: rgba(255, 255, 255, 0.6) !important;
-      border: 1px solid rgba(90,70,255,0.3) !important;
-      border-radius: 12px !important;
-      color: var(--text-main) !important;
-      padding: 6px;
-    }
-
-    .exercise-card {
-      background: rgba(255, 255, 255, 0.5);
-      border-radius: 15px; padding: 1rem; margin: 0.5rem 0;
-      border: 1px solid var(--border);
-      box-shadow: 0 0 20px rgba(90, 70, 255, 0.05);
-      transition: all 0.3s ease; cursor: pointer; text-align: left;
-      color: var(--text-main);
-    }
-    .exercise-card.selected {
-      background: rgba(255, 255, 255, 0.8);
-      transform: translateY(-2px);
-      box-shadow: 0 0 30px rgba(90, 70, 255, 0.15);
-      border: 1px solid rgba(90,70,255,0.4);
-    }
-
-    .metric {
-      background: rgba(255, 255, 255, 0.5);
-      border-radius: 15px; padding: 1rem; text-align: center;
-      border: 1px solid var(--border); margin: 0.5rem;
-    }
-    .metric-value {
-      font-family: 'Orbitron', sans-serif; font-size: 2rem;
-      background: linear-gradient(135deg, var(--gradient-end), var(--gradient-start));
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      margin: 0.5rem 0;
-    }
-    .metric-label { font-size: 0.9rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
-
-    .feedback-text {
-      font-family: 'Exo 2', sans-serif; font-size: 1.1rem; text-align: center;
-      background: linear-gradient(135deg, var(--gradient-end), var(--gradient-start));
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 600;
-    }
-
-    .video-container {
-      border-radius: 20px; overflow: hidden;
-      box-shadow: 0 0 30px var(--glow);
-      border: 1px solid rgba(90,70,255,0.3);
-      margin-bottom: 1.5rem;
-    }
-
-    h1, h2, h3 {
-      font-family: 'Orbitron', sans-serif;
-      background: linear-gradient(135deg, var(--gradient-end), var(--gradient-start));
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    }
-
-    .divider { height: 1px; background: linear-gradient(90deg, transparent, rgba(90,70,255,0.3), transparent); margin: 2rem 0; }
-    .footer { text-align: center; padding: 1rem; margin-top: 1rem; font-size: 0.8rem; color: var(--text-dim); }
-    
-    .theme-switch {
-      position: relative;
-      display: inline-block;
-      width: 60px;
-      height: 34px;
-    }
-    
-    .theme-switch input { 
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
-    
-    .slider {
-      position: absolute;
-      cursor: pointer;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background-color: #f0f0f0;
-      transition: .4s;
-      border-radius: 34px;
-      border: 1px solid rgba(90,70,255,0.3);
-    }
-    
-    .slider:before {
-      position: absolute;
-      content: "";
-      height: 26px;
-      width: 26px;
-      left: 4px;
-      bottom: 3px;
-      background: linear-gradient(135deg, #ffcc00, #ff9500);
-      transition: .4s;
-      border-radius: 50%;
-    }
-    
-    input:checked + .slider {
-      background-color: #0a0a2a;
-    }
-    
-    input:checked + .slider:before {
-      transform: translateX(26px);
-      background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
-    }
-
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(110, 69, 226, 0.4); }
-      70% { box-shadow: 0 0 0 15px rgba(110, 69, 226, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(110, 69, 226, 0); }
-    }
-    .pulse { animation: pulse 2s infinite; }
-    
-    /* Mobile Responsiveness */
-    @media (max-width: 768px) {
-      .header {
-        padding: 0.75rem 1rem;
-        margin-bottom: 1rem;
-      }
-      
-      .control-panel, .metrics-panel, .feedback-panel {
-        padding: 1rem;
-        margin-bottom: 1.5rem;
-      }
-      
-      .metric {
-        padding: 0.75rem;
-        margin: 0.25rem;
-      }
-      
-      .metric-value {
-        font-size: 1.5rem;
-      }
-      
-      h1 {
-        font-size: 1.75rem;
-      }
-      
-      h2 {
-        font-size: 1.25rem;
-      }
-      
-      h3 {
-        font-size: 1.1rem;
-      }
-      
-      .stButton>button {
-        padding: 0.5rem 1rem;
-        font-size: 0.9rem;
-      }
-    }
-    </style>
-    """
-    
-    return dark_css if theme == "dark" else light_css
-
-# Apply CSS based on current theme
-st.markdown(get_css(st.session_state.theme), unsafe_allow_html=True)
-
-# -------------------------------------------------------------------
-# Helpers
-# -------------------------------------------------------------------
-def load_lottieurl(url: str):
-    if not st_lottie or not requests:
-        return None
-    try:
-        r = requests.get(url, timeout=5)
-        if r.status_code == 200:
-            return r.json()
-    except Exception:
-        pass
-    return None
-
-def ensure_metrics_dict():
-    """Ensure metrics keys exist and are strings for UI."""
-    m = st.session_state.metrics
-    m['reps'] = m.get('reps', 0)
-    m['stage'] = m.get('stage', 'Ready')
-    m['feedback'] = m.get('feedback', 'System initialized.')
-    st.session_state.metrics = m
-
-def get_reps_from_evaluator(evaluator):
-    if hasattr(evaluator, 'reps'):
-        return int(getattr(evaluator, 'reps') or 0)
-    if hasattr(evaluator, 'counter'):
-        return int(getattr(evaluator, 'counter') or 0)
-    return 0
-
-def get_attr_safe(obj, name, default):
-    return getattr(obj, name, default) if hasattr(obj, name) else default
-
-# -------------------------------------------------------------------
-# Lottie
-# -------------------------------------------------------------------
-lottie_robot = load_lottieurl("https://assets1.lottiefiles.com/packages/lf20_gn0tojcq.json")
-lottie_gym = load_lottieurl("https://assets1.lottiefiles.com/packages/lf20_obhph3sh.json")
-
-# -------------------------------------------------------------------
-# Session state
-# -------------------------------------------------------------------
-if 'running' not in st.session_state: st.session_state.running = False
-if 'evaluator' not in st.session_state: st.session_state.evaluator = None
-if 'cap' not in st.session_state: st.session_state.cap = None
-if 'temp_file' not in st.session_state: st.session_state.temp_file = None
-if 'metrics' not in st.session_state:
-    st.session_state.metrics = {'reps': 0, 'stage': 'Ready', 'feedback': 'Select an exercise to begin.'}
-if 'selected_exercise' not in st.session_state: st.session_state.selected_exercise = None
-if 'source_type' not in st.session_state: st.session_state.source_type = "Camera"
-if 'uploaded_file' not in st.session_state: st.session_state.uploaded_file = None
-if 'frame_placeholder' not in st.session_state: st.session_state.frame_placeholder = None
-ensure_metrics_dict()
-
-# -------------------------------------------------------------------
-# Header
-# -------------------------------------------------------------------
+# Ultra-modern CSS with cyberpunk aesthetics
 st.markdown("""
-<div class="header">
-  <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;">
-    <div style="display: flex; align-items: center;">
-      <h1 style="margin: 0; font-size: 2.2rem;">🧿 NEXUS GYM AI</h1>
-      <div style="margin-left: 20px;">
-        <label class="theme-switch">
-          <input type="checkbox" onchange="window.streamlitSessionState.set('theme', this.checked ? 'light' : 'dark')" %s>
-          <span class="slider"></span>
-        </label>
-      </div>
-    </div>
-    <div style="display: flex; align-items: center;">
-      <p style="margin: 0; color: var(--text-dim); font-size: 1.1rem; margin-right: 15px;">Next Generation Fitness Intelligence</p>
-      <div style="width: 120px;">
-""" % ("checked" if st.session_state.theme == "light" else ""), unsafe_allow_html=True)
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600;700&family=Audiowide&family=Teko:wght@300;400;500&display=swap');
+    
+    /* Reset and base styling */
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+    
+    /* Main app background with animated gradient */
+    .stApp {
+        background: linear-gradient(-45deg, #0a0e27, #1a0033, #0f172a, #1e0535);
+        background-size: 400% 400%;
+        animation: galaxyShift 15s ease infinite;
+        color: #ffffff;
+        font-family: 'Rajdhani', sans-serif;
+        min-height: 100vh;
+        overflow-x: hidden;
+    }
+    
+    @keyframes galaxyShift {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+    }
+    
+    /* Animated grid background overlay */
+    .stApp::before {
+        content: '';
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-image: 
+            linear-gradient(rgba(0, 255, 255, 0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0, 255, 255, 0.03) 1px, transparent 1px);
+        background-size: 50px 50px;
+        animation: gridMove 20s linear infinite;
+        pointer-events: none;
+        z-index: 1;
+    }
+    
+    @keyframes gridMove {
+        0% { transform: translate(0, 0); }
+        100% { transform: translate(50px, 50px); }
+    }
+    
+    /* Headers with neon glow */
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'Audiowide', cursive;
+        background: linear-gradient(135deg, #00ffff, #ff00ff, #00ffff);
+        background-size: 200% 200%;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        animation: neonShift 3s ease infinite;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+    }
+    
+    @keyframes neonShift {
+        0%, 100% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+    }
+    
+    /* Main title container */
+    .hero-container {
+        position: relative;
+        text-align: center;
+        padding: 40px 20px;
+        margin-bottom: 30px;
+        background: radial-gradient(ellipse at center, rgba(0, 255, 255, 0.1) 0%, transparent 70%);
+        overflow: hidden;
+    }
+    
+    .hero-container::before {
+        content: '';
+        position: absolute;
+        top: -2px;
+        left: -2px;
+        right: -2px;
+        bottom: -2px;
+        background: linear-gradient(45deg, #00ffff, #ff00ff, #00ffff);
+        border-radius: 20px;
+        opacity: 0.5;
+        animation: borderRotate 4s linear infinite;
+        z-index: -1;
+    }
+    
+    @keyframes borderRotate {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
+    .hero-title {
+        font-size: 4em;
+        font-weight: 700;
+        text-shadow: 
+            0 0 20px rgba(0, 255, 255, 0.8),
+            0 0 40px rgba(0, 255, 255, 0.6),
+            0 0 60px rgba(0, 255, 255, 0.4);
+        margin-bottom: 10px;
+        animation: powerUp 1.5s ease-out;
+    }
+    
+    @keyframes powerUp {
+        0% { 
+            opacity: 0;
+            transform: scale(0.5) translateY(50px);
+            filter: blur(10px);
+        }
+        100% { 
+            opacity: 1;
+            transform: scale(1) translateY(0);
+            filter: blur(0);
+        }
+    }
+    
+    .hero-subtitle {
+        font-family: 'Teko', sans-serif;
+        font-size: 1.8em;
+        color: #ff00ff;
+        text-transform: uppercase;
+        letter-spacing: 8px;
+        animation: slideIn 1s ease-out 0.5s both;
+        text-shadow: 0 0 10px rgba(255, 0, 255, 0.8);
+    }
+    
+    @keyframes slideIn {
+        0% { 
+            opacity: 0;
+            transform: translateX(-100px);
+        }
+        100% { 
+            opacity: 1;
+            transform: translateX(0);
+        }
+    }
+    
+    /* Motivational quote card */
+    .motivation-card {
+        background: linear-gradient(135deg, rgba(0, 20, 40, 0.9), rgba(40, 0, 60, 0.9));
+        border: 1px solid transparent;
+        border-image: linear-gradient(45deg, #00ffff, #ff00ff) 1;
+        border-radius: 20px;
+        padding: 30px;
+        margin: 30px auto;
+        max-width: 800px;
+        position: relative;
+        overflow: hidden;
+        backdrop-filter: blur(10px);
+        box-shadow: 
+            0 0 30px rgba(0, 255, 255, 0.3),
+            inset 0 0 20px rgba(255, 0, 255, 0.1);
+        animation: floatCard 6s ease-in-out infinite;
+    }
+    
+    @keyframes floatCard {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-10px); }
+    }
+    
+    .motivation-card::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: linear-gradient(45deg, transparent, rgba(0, 255, 255, 0.1), transparent);
+        animation: scanLine 3s linear infinite;
+    }
+    
+    @keyframes scanLine {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
+    .quote-text {
+        font-family: 'Teko', sans-serif;
+        font-size: 2em;
+        font-weight: 300;
+        color: #00ffff;
+        text-align: center;
+        margin-bottom: 15px;
+        text-shadow: 0 0 15px rgba(0, 255, 255, 0.6);
+        position: relative;
+        z-index: 2;
+    }
+    
+    .quote-author {
+        font-family: 'Rajdhani', sans-serif;
+        font-style: normal;
+        color: #ff00ff;
+        font-size: 1.2em;
+        text-align: right;
+        text-transform: uppercase;
+        letter-spacing: 3px;
+        position: relative;
+        z-index: 2;
+    }
+    
+    /* Exercise selector */
+    .stSelectbox > div > div {
+        background: linear-gradient(135deg, rgba(0, 20, 40, 0.95), rgba(40, 0, 60, 0.95));
+        color: #00ffff;
+        border: 2px solid #00ffff;
+        border-radius: 15px;
+        font-family: 'Rajdhani', sans-serif;
+        font-weight: 600;
+        font-size: 1.1em;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        box-shadow: 
+            0 0 20px rgba(0, 255, 255, 0.4),
+            inset 0 0 10px rgba(0, 255, 255, 0.2);
+        transition: all 0.3s ease;
+    }
+    
+    .stSelectbox > div > div:hover {
+        border-color: #ff00ff;
+        box-shadow: 
+            0 0 30px rgba(255, 0, 255, 0.5),
+            inset 0 0 15px rgba(255, 0, 255, 0.3);
+        transform: translateY(-2px);
+    }
+    
+    /* Section headers */
+    .section-header {
+        display: inline-block;
+        background: linear-gradient(90deg, transparent, rgba(0, 255, 255, 0.1), transparent);
+        padding: 10px 30px;
+        margin: 20px 0;
+        border-left: 3px solid #00ffff;
+        border-right: 3px solid #ff00ff;
+        font-family: 'Audiowide', cursive;
+        font-size: 1.3em;
+        color: #ffffff;
+        text-transform: uppercase;
+        letter-spacing: 3px;
+        position: relative;
+    }
+    
+    /* Metrics display */
+    .metrics-container {
+        background: linear-gradient(135deg, rgba(0, 30, 50, 0.9), rgba(50, 0, 70, 0.9));
+        border-radius: 25px;
+        padding: 30px;
+        margin: 30px auto;
+        max-width: 900px;
+        border: 2px solid transparent;
+        border-image: linear-gradient(45deg, #00ffff, #ff00ff, #00ffff) 1;
+        position: relative;
+        overflow: hidden;
+        backdrop-filter: blur(15px);
+    }
+    
+    .metrics-container::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(0, 255, 255, 0.2), transparent);
+        animation: sweepRight 3s infinite;
+    }
+    
+    @keyframes sweepRight {
+        0% { left: -100%; }
+        100% { left: 100%; }
+    }
+    
+    .metrics-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 25px;
+        position: relative;
+        z-index: 2;
+    }
+    
+    .metric-card {
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid rgba(0, 255, 255, 0.3);
+        border-radius: 15px;
+        padding: 20px;
+        text-align: center;
+        transition: all 0.3s ease;
+    }
+    
+    .metric-card:hover {
+        transform: translateY(-5px) scale(1.05);
+        border-color: #ff00ff;
+        box-shadow: 0 10px 30px rgba(255, 0, 255, 0.3);
+    }
+    
+    .metric-label {
+        font-family: 'Teko', sans-serif;
+        font-size: 1.2em;
+        color: #00ffff;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        margin-bottom: 10px;
+    }
+    
+    .metric-value {
+        font-family: 'Audiowide', cursive;
+        font-size: 3em;
+        background: linear-gradient(135deg, #00ffff, #ff00ff);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        font-weight: 700;
+        text-shadow: 0 0 30px rgba(0, 255, 255, 0.5);
+    }
+    
+    .feedback-display {
+        background: rgba(0, 0, 0, 0.6);
+        border-left: 4px solid #ff00ff;
+        border-radius: 10px;
+        padding: 20px;
+        margin-top: 20px;
+        font-size: 1.2em;
+        color: #ffffff;
+        position: relative;
+        z-index: 2;
+        animation: pulseGlow 2s ease-in-out infinite;
+    }
+    
+    @keyframes pulseGlow {
+        0%, 100% { box-shadow: 0 0 10px rgba(255, 0, 255, 0.3); }
+        50% { box-shadow: 0 0 20px rgba(255, 0, 255, 0.6); }
+    }
+    
+    /* Buttons */
+    .stButton > button {
+        background: linear-gradient(135deg, #00ffff, #ff00ff);
+        color: #000000;
+        border: none;
+        border-radius: 50px;
+        padding: 15px 40px;
+        font-family: 'Audiowide', cursive;
+        font-weight: 700;
+        font-size: 1.1em;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        cursor: pointer;
+        position: relative;
+        overflow: hidden;
+        transition: all 0.3s ease;
+        box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+    }
+    
+    .stButton > button:hover {
+        transform: translateY(-3px) scale(1.05);
+        box-shadow: 0 5px 30px rgba(255, 0, 255, 0.7);
+    }
+    
+    .stButton > button::before {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 0;
+        height: 0;
+        background: rgba(255, 255, 255, 0.5);
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+        transition: width 0.6s, height 0.6s;
+    }
+    
+    .stButton > button:active::before {
+        width: 300px;
+        height: 300px;
+    }
+    
+    /* FPS badge */
+    .fps-indicator {
+        display: inline-block;
+        background: linear-gradient(135deg, rgba(0, 255, 0, 0.2), rgba(0, 255, 0, 0.1));
+        border: 1px solid #00ff00;
+        border-radius: 20px;
+        padding: 8px 16px;
+        font-family: 'Audiowide', cursive;
+        font-size: 0.9em;
+        color: #00ff00;
+        text-shadow: 0 0 10px rgba(0, 255, 0, 0.8);
+        animation: fpsPulse 1s ease-in-out infinite;
+    }
+    
+    @keyframes fpsPulse {
+        0%, 100% { opacity: 0.8; }
+        50% { opacity: 1; }
+    }
+    
+    /* Expander styling */
+    .streamlit-expanderHeader {
+        background: linear-gradient(135deg, rgba(0, 20, 40, 0.9), rgba(40, 0, 60, 0.9));
+        border: 1px solid #00ffff;
+        border-radius: 10px;
+        font-family: 'Rajdhani', sans-serif;
+        font-weight: 600;
+        color: #00ffff;
+    }
+    
+    .streamlit-expanderContent {
+        background: rgba(0, 10, 20, 0.9);
+        border: 1px solid rgba(0, 255, 255, 0.3);
+        border-radius: 0 0 10px 10px;
+        color: #ffffff;
+    }
+    
+    /* Footer */
+    .footer {
+        text-align: center;
+        padding: 30px;
+        margin-top: 50px;
+        border-top: 1px solid rgba(0, 255, 255, 0.3);
+        color: #00ffff;
+        font-family: 'Teko', sans-serif;
+        font-size: 1.1em;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        opacity: 0.8;
+    }
+    
+    /* Mobile optimizations */
+    @media (max-width: 768px) {
+        .hero-title {
+            font-size: 2.5em;
+        }
+        
+        .hero-subtitle {
+            font-size: 1.2em;
+            letter-spacing: 4px;
+        }
+        
+        .quote-text {
+            font-size: 1.5em;
+        }
+        
+        .metric-value {
+            font-size: 2em;
+        }
+        
+        .metrics-grid {
+            grid-template-columns: 1fr;
+        }
+        
+        .stButton > button {
+            padding: 12px 30px;
+            font-size: 1em;
+        }
+    }
+    
+    /* Loading animation */
+    @keyframes dataStream {
+        0% { transform: translateY(100%); opacity: 0; }
+        50% { opacity: 1; }
+        100% { transform: translateY(-100%); opacity: 0; }
+    }
+    
+    .data-stream {
+        position: fixed;
+        right: 0;
+        top: 0;
+        width: 2px;
+        height: 100px;
+        background: linear-gradient(to bottom, transparent, #00ffff, transparent);
+        animation: dataStream 2s linear infinite;
+    }
+    
+    /* WebRTC container styling */
+    .stWebrtc {
+        border: 2px solid #00ffff;
+        border-radius: 20px;
+        box-shadow: 0 0 30px rgba(0, 255, 255, 0.5);
+        overflow: hidden;
+    }
+</style>
 
-if lottie_robot:
-    st_lottie(lottie_robot, height=100, key="robot")
+<div class="data-stream"></div>
+""", unsafe_allow_html=True)
 
-st.markdown("</div></div></div>", unsafe_allow_html=True)
+# Motivational quotes database
+motivational_quotes = [
+    {"text": "YEAH BUDDY, LIGHTWEIGHT BABY!", "author": "Ronnie Coleman"},
+    {"text": "I'LL BE BACK", "author": "The Terminator"},
+    {"text": "CONQUER FROM WITHIN", "author": "Unknown Warrior"},
+    {"text": "PAIN IS TEMPORARY, GLORY IS FOREVER", "author": "Ancient Proverb"},
+    {"text": "THE BODY ACHIEVES WHAT THE MIND BELIEVES", "author": "Neural Network"},
+    {"text": "BECOME YOUR OWN HERO", "author": "Digital Sage"},
+    {"text": "TRANSCEND YOUR LIMITS", "author": "AI Oracle"},
+    {"text": "FORGE YOUR DESTINY IN IRON", "author": "Cyber Monk"}
+]
 
-# -------------------------------------------------------------------
-# Layout
-# -------------------------------------------------------------------
-left, right = st.columns([2, 1])
+# Initialize session state
+if "current_quote" not in st.session_state:
+    st.session_state.current_quote = random.choice(motivational_quotes)
+if "workout_start_time" not in st.session_state:
+    st.session_state.workout_start_time = time.time()
 
-with left:
-    st.markdown("### REAL-TIME FORM ANALYSIS")
-    st.session_state.frame_placeholder = st.empty()
-    st.markdown('<div class="video-container"></div>', unsafe_allow_html=True)
-
-    st.markdown("### AI FORM FEEDBACK")
-    st.markdown(
-        f"""
-        <div class="feedback-panel">
-            <div class="feedback-text">{st.session_state.metrics.get('feedback','')}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-with right:
-    st.markdown("### CONTROL PANEL")
-    st.markdown('<div class="control-panel">', unsafe_allow_html=True)
-
-    # Exercise selection
-    st.markdown("**SELECT EXERCISE**")
-    choices = [
-        ("Squat", "🦵"),
-        ("Push-up", "💪"),
-        ("Plank", "🧘"),
-        ("Bicep Curl", "💪"),
-        ("Chest Press", "🏋️")
-    ]
-    for label, emoji in choices:
-        is_selected = (st.session_state.selected_exercise == label)
-        btn = st.button(f"{emoji} {label}", key=f"btn_{label}", use_container_width=True)
-        if btn:
-            st.session_state.selected_exercise = label
-            st.session_state.metrics['feedback'] = f"Selected {label}. Ready to start."
-            st.session_state.metrics['stage'] = "Ready"
-            st.session_state.metrics['reps'] = 0
-            st.session_state.evaluator = None  # force re-init on next start
-
-    # Source selection
-    st.markdown("**INPUT SOURCE**")
-    st.session_state.source_type = st.radio(
-        "Input Source",
-        ["Camera", "Video"],
-        horizontal=True,
-        label_visibility="collapsed",
-        key="source_type_radio"
-    )
-
-    if st.session_state.source_type == "Video":
-        st.session_state.uploaded_file = st.file_uploader(
-            "Upload video file", type=["mp4", "mov", "avi"], key="video_uploader"
-        )
-    else:
-        # Camera selection
-        available_cameras = get_available_cameras()
-        if available_cameras:
-            camera_options = {0: "Back Camera", 1: "Front Camera"}
-            selected_camera = st.selectbox(
-                "Select Camera",
-                options=available_cameras,
-                format_func=lambda x: camera_options.get(x, f"Camera {x}"),
-                key="camera_selector"
-            )
-            st.session_state.camera_index = selected_camera
-        else:
-            st.warning("No cameras detected. Using default camera.")
-            st.session_state.camera_index = 0
-
-    # Start / Stop
-    c1, c2 = st.columns(2)
-    with c1:
-        start_disabled = st.session_state.running or (st.session_state.selected_exercise is None)
-        if st.button("🚀 START", disabled=start_disabled, use_container_width=True, key="start_btn"):
-            st.session_state.running = True
-            st.session_state.metrics.update({'reps': 0, 'stage': 'Initializing...', 'feedback': 'System calibrating...'})
-            st.session_state.evaluator = None  # will init below
-
-    with c2:
-        if st.button("⏹️ STOP", disabled=not st.session_state.running, use_container_width=True, key="stop_btn"):
-            st.session_state.running = False
-            if st.session_state.cap:
-                try:
-                    st.session_state.cap.release()
-                except Exception:
-                    pass
-            st.session_state.cap = None
-            if st.session_state.temp_file and os.path.exists(st.session_state.temp_file):
-                try:
-                    os.unlink(st.session_state.temp_file)
-                except Exception:
-                    pass
-            st.session_state.temp_file = None
-            st.session_state.evaluator = None
-            st.session_state.metrics['feedback'] = "Session stopped. Ready for next exercise."
-            st.session_state.metrics['stage'] = "Ready"
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Metrics
-    st.markdown("### PERFORMANCE METRICS")
-    st.markdown('<div class="metrics-panel">', unsafe_allow_html=True)
-    m1, m2, m3 = st.columns(3)
-    with m1:
-        st.markdown(
-            f"""
-            <div class="metric">
-              <div class="metric-label">REPS</div>
-              <div class="metric-value">{st.session_state.metrics.get('reps', 0)}</div>
-            </div>
-            """, unsafe_allow_html=True)
-    with m2:
-        st.markdown(
-            f"""
-            <div class="metric">
-              <div class="metric-label">STAGE</div>
-              <div class="metric-value">{st.session_state.metrics.get('stage','Ready')}</div>
-            </div>
-            """, unsafe_allow_html=True)
-    with m3:
-        st.markdown(
-            f"""
-            <div class="metric">
-              <div class="metric-label">EXERCISE</div>
-              <div class="metric-value">{st.session_state.selected_exercise or '-'}</div>
-            </div>
-            """, unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Instructions
-    if st.session_state.selected_exercise:
-        st.markdown("### EXERCISE INSTRUCTIONS")
-        ex = st.session_state.selected_exercise
-        if ex == "Squat":
-            st.info(
-                "- Stand feet shoulder-width apart\n"
-                "- Keep chest up, back neutral\n"
-                "- Sit back and down until thighs ~parallel to ground\n"
-                "- Drive up through mid-foot"
-            )
-        elif ex == "Push-up":
-            st.info(
-                "- High plank: hands under shoulders\n"
-                "- Body straight head-to-heels\n"
-                "- Lower chest near ground, elbows ~45°\n"
-                "- Press back to full extension"
-            )
-        elif ex == "Plank":
-            st.info(
-                "- Forearms under shoulders\n"
-                "- Body straight head-to-heels\n"
-                "- Squeeze glutes and core\n"
-                "- Avoid sagging/hip hike"
-            )
-        elif ex == "Bicep Curl":
-            st.info(
-                "- Elbows close to torso\n"
-                "- Curl without swinging\n"
-                "- Control down slowly"
-            )
-        elif ex == "Chest Press":
-            st.info(
-                "- Lie back, elbows ~90° at start\n"
-                "- Press to full extension\n"
-                "- Lower under control"
-            )
-
-# Add gym animation at the bottom if in light mode
-if st.session_state.theme == "light" and lottie_gym:
-    st_lottie(lottie_gym, height=200, key="gym")
-
-# -------------------------------------------------------------------
-# Video processing
-# -------------------------------------------------------------------
-def init_capture():
-    """Initialize cv2.VideoCapture based on source."""
-    # If already open, reuse
-    if st.session_state.cap and st.session_state.cap.isOpened():
-        return True
-
-    if st.session_state.source_type == "Camera":
-        cap = cv2.VideoCapture(st.session_state.camera_index)
-        if not cap.isOpened():
-            st.error("Cannot access camera. Please check permissions.")
-            return False
-        st.session_state.cap = cap
-        return True
-    else:
-        if st.session_state.uploaded_file is None:
-            st.error("Please upload a video file first.")
-            return False
-        # Save to a temp file
-        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tfile.write(st.session_state.uploaded_file.read())
-        tfile.flush()
-        st.session_state.temp_file = tfile.name
-        cap = cv2.VideoCapture(tfile.name)
-        if not cap.isOpened():
-            st.error("Cannot open the uploaded video file.")
-            return False
-        st.session_state.cap = cap
-        return True
-
-def init_evaluator():
-    """Instantiate the evaluator matching the selected exercise."""
-    if st.session_state.evaluator is not None:
-        return
-    ex = st.session_state.selected_exercise
-    if not ex:
-        return
-    if ex == "Squat":
-        st.session_state.evaluator = SquatEvaluator(CFG)
-    elif ex == "Push-up":
-        st.session_state.evaluator = PushupEvaluator()
-    elif ex == "Plank":
-        st.session_state.evaluator = PlankEvaluator()
-    elif ex == "Bicep Curl":
-        st.session_state.evaluator = BicepCurlEvaluator()
-    elif ex == "Chest Press":
-        st.session_state.evaluator = ChestPressEvaluator()
-
-def process_one_frame():
-    """Read one frame, process via evaluator, and display."""
-    cap = st.session_state.cap
-    evaluator = st.session_state.evaluator
-    if not cap or not evaluator or not cap.isOpened():
-        return False
-
-    ok, frame = cap.read()
-    if not ok:
-        if st.session_state.source_type == "Video":
-            # restart video
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            return True
-        else:
-            st.warning("Failed to read frame from camera.")
-            return False
-
-    # Flip frame if using front camera for mirror effect
-    if st.session_state.source_type == "Camera" and st.session_state.camera_index == 1:
-        frame = cv2.flip(frame, 1)
-
-    try:
-        processed = evaluator.process(frame)
-    except Exception as e:
-        st.error(f"Error processing frame: {e}")
-        return False
-
-    # Update metrics from evaluator
-    st.session_state.metrics['reps'] = get_reps_from_evaluator(evaluator)
-    st.session_state.metrics['stage'] = str(get_attr_safe(evaluator, 'stage', 'Ready'))
-    st.session_state.metrics['feedback'] = str(get_attr_safe(evaluator, 'feedback', ''))
-
-    # Draw to UI
-    st.session_state.frame_placeholder.image(processed, channels="BGR", use_container_width=True)
-    return True
-
-# -------------------------------------------------------------------
-# Run loop (one-frame-per-rerun with gentle throttle)
-# -------------------------------------------------------------------
-if st.session_state.running:
-    if init_capture():
-        init_evaluator()
-        _ = process_one_frame()
-        # gentle throttle to avoid CPU spike/flicker
-        time.sleep(0.02)
-        st.rerun()
-
-# -------------------------------------------------------------------
-# Footer
-# -------------------------------------------------------------------
+# Hero section
 st.markdown("""
-<div class="divider"></div>
-<div class="footer">
-  <p>NEXUS GYM AI v3.0 | Advanced Motion Analysis Technology | © 2024 Future Fitness Systems</p>
+<div class="hero-container">
+    <h1 class="hero-title">⚡KSIHU MERA LAAL KAREGA KAMAL⚡</h1>
+    <p class="hero-subtitle">Neural Exercise System</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Add JavaScript to handle theme toggle
-st.markdown("""
-<script>
-// Initialize streamlit session state if not exists
-if (!window.streamlitSessionState) {
-    window.streamlitSessionState = new Proxy({}, {
-        set: function(obj, prop, value) {
-            obj[prop] = value;
-            // Communicate with Streamlit
-            const event = new CustomEvent('streamlitSessionStateSet', {detail: {key: prop, value: value}});
-            document.dispatchEvent(event);
-            return true;
-        }
-    });
-}
+# Motivational quote display
+quote = st.session_state.current_quote
+st.markdown(f"""
+<div class="motivation-card">
+    <div class="quote-text">"{quote['text']}"</div>
+    <div class="quote-author">// {quote['author']}</div>
+</div>
+""", unsafe_allow_html=True)
 
-// Listen for theme change events
-document.addEventListener('streamlitSessionStateSet', function(e) {
-    if (e.detail.key === 'theme') {
-        // Rerun the app to apply the new theme
-        window.location.reload();
-    }
-});
-</script>
+# Exercise selection
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    st.markdown('<div class="section-header">⚡ TRAINING MODULE ⚡</div>', unsafe_allow_html=True)
+    exercise_choice = st.selectbox(
+        "Choose your exercise:",
+        ("Bicep Curl", "Squat", "Pushup", "Plank", "Standing Cable Press"),
+        label_visibility="collapsed"
+    )
+
+# Combined callback function
+def combined_callback(frame: av.VideoFrame):
+    if exercise_choice == "Bicep Curl":
+        return bicep_callback(frame)
+    elif exercise_choice == "Squat":
+        return squat_callback(frame)
+    elif exercise_choice == "Pushup":
+        return pushup_callback(frame)
+    elif exercise_choice == "Plank":
+        return plank_callback(frame)
+    elif exercise_choice == "Standing Cable Press":
+        return cable_press_callback(frame)
+    else:
+        img = frame.to_ndarray(format="bgr24")
+        return av.VideoFrame.from_ndarray(img, format="bgr24"), {"reps":0, "feedback":"System Ready", "fps":0}
+
+# Video streamer
+st.markdown('<div class="section-header">📡 MOTION CAPTURE INTERFACE 📡</div>', unsafe_allow_html=True)
+webrtc_ctx = webrtc_streamer(
+    key="nexus-trainer",
+    video_frame_callback=combined_callback,
+    media_stream_constraints={"video": True, "audio": False},
+    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
+
+# Performance metrics
+st.markdown('<div class="section-header">⚡ PERFORMANCE ANALYTICS ⚡</div>', unsafe_allow_html=True)
+metrics_placeholder = st.empty()
+
+# Initialize metrics
+if "latest_metrics" not in st.session_state:
+    st.session_state.latest_metrics = {"reps":0, "feedback":"Awaiting Neural Link...", "fps":0}
+
+# Update metrics in real-time
+if webrtc_ctx.video_transformer:
+    import threading
+    
+    def metrics_updater():
+        while webrtc_ctx.state.playing:
+            if hasattr(webrtc_ctx.video_transformer, "latest_metrics"):
+                st.session_state.latest_metrics = webrtc_ctx.video_transformer.latest_metrics
+            time.sleep(0.1)
+    
+    threading.Thread(target=metrics_updater, daemon=True).start()
+
+# Display metrics
+metrics = st.session_state.get("latest_metrics", {"reps":0, "feedback":"System Initializing...", "fps":0})
+
+# Calculate workout duration
+workout_duration = int(time.time() - st.session_state.workout_start_time)
+duration_min = workout_duration // 60
+duration_sec = workout_duration % 60
+
+# Metrics HTML
+metrics_html = f"""
+<div class="metrics-container">
+    <div class="metrics-grid">
+        <div class="metric-card">
+            <div class="metric-label">Reps Completed</div>
+            <div class="metric-value">{metrics['reps']}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Session Time</div>
+            <div class="metric-value">{duration_min:02d}:{duration_sec:02d}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Performance</div>
+            <div class="metric-value">{'🔥' * min(5, max(1, metrics['reps'] // 5))}</div>
+        </div>
+    </div>
+    <div class="feedback-display">
+        <strong>AI COACH:</strong> {metrics['feedback']}
+    </div>
+    <div style="text-align: right; margin-top: 15px;">
+        <span class="fps-indicator">⚡ {metrics['fps']:.1f} FPS</span>
+    </div>
+</div>
+"""
+
+metrics_placeholder.markdown(metrics_html, unsafe_allow_html=True)
+
+# Control buttons
+col1, col2, col3 = st.columns([1, 1, 1])
+with col2:
+    if st.button("🔄 RECHARGE MOTIVATION", use_container_width=True):
+        st.session_state.current_quote = random.choice(motivational_quotes)
+        st.rerun()
+
+# Tips section
+with st.expander("📱 OPTIMIZATION PROTOCOLS"):
+    st.markdown("""
+    **SYSTEM REQUIREMENTS:**
+    - 🔄 **Orientation:** Horizontal mode recommended
+    - 📐 **Distance:** Maintain 6-8 feet from sensor
+    - 💡 **Illumination:** Ensure optimal lighting conditions
+    - 📷 **Permissions:** Grant camera access when prompted
+    - 🎯 **Position:** Center yourself in frame
+    
+    **PERFORMANCE TIPS:**
+    - Use stable surface or tripod for device
+    - Clear background for better tracking
+    - Wear contrasting colors for accuracy
+    - Maintain consistent form throughout
+    """)
+
+# Advanced stats expander
+with st.expander("📊 ADVANCED ANALYTICS"):
+    st.markdown(f"""
+    **SESSION STATISTICS:**
+    - Total Reps: **{metrics['reps']}**
+    - Average RPM: **{metrics['reps'] / max(1, workout_duration/60):.1f}**
+    - Current Exercise: **{exercise_choice}**
+    - Frame Rate: **{metrics['fps']:.1f} FPS**
+    - Session Duration: **{duration_min:02d}:{duration_sec:02d}**
+    
+    **PERFORMANCE GRADE:** {'⭐' * min(5, max(1, metrics['reps'] // 10))}
+    """)
+
+# Footer
+st.markdown("---")
+st.markdown("""
+<div class="footer">
+    POWERED BY NEURAL MOTION TRACKING | NEXUS AI © 2025 | VERSION 4.0.1
+</div>
 """, unsafe_allow_html=True)
