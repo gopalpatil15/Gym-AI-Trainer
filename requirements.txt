@@ -4,6 +4,5 @@ mediapipe
 opencv-python
 numpy
 av
-math
 datetime
 random
