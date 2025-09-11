@@ -14,7 +14,7 @@ from exercises.standing_cable_press import cable_press_callback
 
 # Page configuration
 st.set_page_config(
-    page_title="KSIHU MERA LAAL KAREGA KAMAL",
+    page_title="VEER AI",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
