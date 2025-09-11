@@ -1,6 +1,9 @@
-streamlit==1.30.0
-streamlit-webrtc==0.51.0
-mediapipe==1.10.10
-opencv-python==4.8.0.74
-numpy==1.26.0
-av==11.1.0
+streamlit
+streamlit-webrtc
+mediapipe
+opencv-python
+numpy
+av
+math
+datetime
+random
