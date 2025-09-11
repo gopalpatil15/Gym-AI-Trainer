@@ -529,8 +529,8 @@ if "workout_start_time" not in st.session_state:
 # Hero section
 st.markdown("""
 <div class="hero-container">
-    <h1 class="hero-title">⚡KSIHU MERA LAAL KAREGA KAMAL⚡</h1>
-    <p class="hero-subtitle">Neural Exercise System</p>
+    <h1 class="hero-title">⚡VEER AI ⚡</h1>
+    <p class="hero-subtitle">VEER Exercise System</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -675,6 +675,6 @@ with st.expander("📊 ADVANCED ANALYTICS"):
 st.markdown("---")
 st.markdown("""
 <div class="footer">
-    POWERED BY NEURAL MOTION TRACKING | NEXUS AI © 2025 | VERSION 4.0.1
+    POWERED BY NEURAL MOTION TRACKING | VEER AI © 2025 | VERSION 4.0.1
 </div>
 """, unsafe_allow_html=True)
