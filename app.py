@@ -732,4 +732,8 @@ with st.expander("🎯 EXERCISE INSTRUCTIONS"):
         - Extend your arms fully without locking elbows
         - Slowly return to starting position
         - Maintain tension throughout the movement
+<<<<<<< HEAD
         """)
+=======
+        """)
+>>>>>>> 8e00ac4123b588ae2d2051fdd0407d857a1d46f9

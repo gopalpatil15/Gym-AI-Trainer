@@ -97,4 +97,8 @@ def plank_callback(frame: av.VideoFrame):
     _plank_eval.update_fps(fps)
     metrics["fps"] = moving_average(_plank_eval.fps_hist)
 
+<<<<<<< HEAD
     return av.VideoFrame.from_ndarray(img, format="bgr24"), metrics
+=======
+    return av.VideoFrame.from_ndarray(img, format="bgr24"), metrics
+>>>>>>> 8e00ac4123b588ae2d2051fdd0407d857a1d46f9
