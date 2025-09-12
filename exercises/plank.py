@@ -1,128 +1,100 @@
-import cv2
 import time
-import av
-import mediapipe as mp
-import numpy as np
 from collections import deque
-from utils.angle_calculator import angle_3pts
+import av
+import cv2
+from utils.angle_calculator import angle_3pts, moving_average
+from utils.pose_manager import get_pose_context, mp_drawing, mp_pose, LANDMARK_SPEC, CONNECTION_SPEC
+import mediapipe as mp
 
 class PlankEvaluator:
-    def __init__(self):
-        # Feedback state
+    def __init__(self, hips_low=160, hips_high=200):
         self.feedback = "Get into plank position..."
-        self.last_feedback = None
+        self.angle_hist = deque(maxlen=5)
+        self.fps_hist = deque(maxlen=20)
+        self.hips_low = hips_low
+        self.hips_high = hips_high
+        self.reps = 0
 
-        # Angle smoothing
-        self.angle_history = deque(maxlen=5)
+    def update_fps(self, fps):
+        self.fps_hist.append(fps)
 
-        # Config thresholds
-        self.hips_dropped_threshold = 160
-        self.hips_high_threshold = 200
+    def process_landmarks(self, landmarks, frame):
+        try:
+            shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+            hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP.value]
+            ankle = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value]
+            s, h, a = [shoulder.x, shoulder.y], [hip.x, hip.y], [ankle.x, ankle.y]
+        except Exception:
+            return frame, {"reps": 0, "feedback": "Move into frame", "fps": None}
 
-        # Mediapipe
-        self.mp_pose = mp.solutions.pose
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.pose = self.mp_pose.Pose(
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
+        ang = angle_3pts(s, h, a)
+        if ang is not None:
+            self.angle_hist.append(ang)
+        ang_s = moving_average(self.angle_hist)
+
+        if ang_s is not None:
+            if ang_s < self.hips_low:
+                self.feedback = "Keep hips up!"
+                color = (0,0,255)
+            elif ang_s > self.hips_high:
+                self.feedback = "Lower hips"
+                color = (0,165,255)
+            else:
+                self.feedback = "Good form!"
+                color = (0,255,0)
+        else:
+            color = (0,255,0)
+
+        cv2.putText(frame, f"Angle: {int(ang_s) if ang_s else '--'}°",
+                    (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+        cv2.putText(frame, self.feedback, (30, 100),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+
+        mp_drawing.draw_landmarks(
+            frame,
+            landmark_list=mp.framework.formats.landmark_pb2.NormalizedLandmarkList(landmark=landmarks),
+            connections=mp_pose.POSE_CONNECTIONS,
+            landmark_drawing_spec=LANDMARK_SPEC,
+            connection_drawing_spec=CONNECTION_SPEC
         )
 
-    def get_landmark_point(self, landmarks, idx):
-        """Get (x, y) if visible, else None"""
-        if not landmarks or idx >= len(landmarks):
-            return None
-        lm = landmarks[idx]
-        if lm.visibility < 0.5:
-            return None
-        return [lm.x, lm.y]
-
-    def process(self, frame):
-        """Process one frame, return annotated frame + metrics dict"""
-        image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.pose.process(image_rgb)
-
-        if results.pose_landmarks:
-            landmarks = results.pose_landmarks.landmark
-            h, w = frame.shape[:2]
-
-            # Try left side first
-            shoulder = self.get_landmark_point(landmarks, self.mp_pose.PoseLandmark.LEFT_SHOULDER.value)
-            hip = self.get_landmark_point(landmarks, self.mp_pose.PoseLandmark.LEFT_HIP.value)
-            ankle = self.get_landmark_point(landmarks, self.mp_pose.PoseLandmark.LEFT_ANKLE.value)
-
-            # Fallback right side
-            if not all([shoulder, hip, ankle]):
-                shoulder = self.get_landmark_point(landmarks, self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value)
-                hip = self.get_landmark_point(landmarks, self.mp_pose.PoseLandmark.RIGHT_HIP.value)
-                ankle = self.get_landmark_point(landmarks, self.mp_pose.PoseLandmark.RIGHT_ANKLE.value)
-
-            if all([shoulder, hip, ankle]):
-                # Angle
-                raw_angle = angle_3pts(shoulder, hip, ankle)
-                self.angle_history.append(raw_angle)
-                angle = np.mean(self.angle_history)
-
-                cv2.putText(frame, f"Angle: {int(angle)}°", (30, 60),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-                # Feedback
-                if angle < self.hips_dropped_threshold:
-                    self.feedback = "Keep your hips up!"
-                    color = (0, 0, 255)
-                elif angle > self.hips_high_threshold:
-                    self.feedback = "Lower your hips."
-                    color = (0, 165, 255)
-                else:
-                    self.feedback = "Good form!"
-                    color = (0, 255, 0)
-
-                cv2.putText(frame, self.feedback, (30, 100),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-
-            # Draw skeleton
-            self.mp_drawing.draw_landmarks(
-                frame, results.pose_landmarks, self.mp_pose.POSE_CONNECTIONS,
-                self.mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2, circle_radius=2),
-                self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
-            )
-        else:
-            cv2.putText(frame, "No person detected", (20, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-
-        # ✅ Return annotated frame and metrics
-        metrics = {
-            "feedback": self.feedback
-        }
-        return frame, metrics
-
-    def reset(self):
-        """Reset feedback"""
-        self.feedback = "Get into plank position..."
-        self.last_feedback = None
-
+        return frame, {"reps": self.reps, "feedback": self.feedback,
+                       "fps": moving_average(self.fps_hist)}
 
 # -------------------------
-# Global instance (avoid re-init every frame)
+# Global evaluator + callback
 # -------------------------
-plank_evaluator = PlankEvaluator()
+_plank_eval = PlankEvaluator()
 _prev_time = time.time()
 
-
 def plank_callback(frame: av.VideoFrame):
-    global _prev_time
+    global _prev_time, _plank_eval
     img = frame.to_ndarray(format="bgr24")
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-    annotated, metrics = plank_evaluator.process(img)
+    try:
+        # Use context manager instead of global POSE
+        with get_pose_context(
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+            model_complexity=0
+        ) as pose:
+            res = pose.process(rgb)
+    except Exception:
+        cv2.putText(img, "Pose error", (20,60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+        metrics = {"reps": 0, "feedback": "Pose error", "fps": None}
+        return av.VideoFrame.from_ndarray(img, format="bgr24"), metrics
 
-    # FPS overlay
+    if res.pose_landmarks:
+        img, metrics = _plank_eval.process_landmarks(res.pose_landmarks.landmark, img)
+    else:
+        metrics = {"reps": 0, "feedback": "No person detected", "fps": None}
+
     now = time.time()
     fps = 1.0 / max(1e-6, now - _prev_time)
     _prev_time = now
-    cv2.putText(annotated, f"FPS: {fps:.1f}", (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (180, 180, 255), 2)
+    _plank_eval.update_fps(fps)
+    metrics["fps"] = moving_average(_plank_eval.fps_hist)
 
-    # Extract metrics
-    feedback = metrics.get("feedback", "Keep holding!")
-    reps = metrics.get("reps", 0)  # or use "duration" if you track hold time
-
-    return av.VideoFrame.from_ndarray(img, format="bgr24"),{reps, feedback} 
+    return av.VideoFrame.from_ndarray(img, format="bgr24"), metrics
