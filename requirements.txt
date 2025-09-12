@@ -1,6 +1,15 @@
-streamlit==1.30.0
-streamlit-webrtc==0.51.0
-mediapipe==1.10.10
-opencv-python==4.8.0.74
-numpy==1.26.0
-av==11.1.0
+# Core Streamlit and WebRTC
+streamlit==1.28.1
+streamlit-webrtc==0.47.1
+
+# Computer Vision and ML
+opencv-python-headless==4.8.1.78
+mediapipe==0.10.7
+numpy==1.24.3
+
+# Video Processing
+av==10.0.0
+
+# Utilities
+aiortc==1.6.0
+attrs==23.1.0

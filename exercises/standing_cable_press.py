@@ -5,6 +5,7 @@ import av
 import time
 from collections import deque
 from utils.angle_calculator import angle_3pts
+from utils.pose_manager import get_pose_context
 
 
 class StandingCablePressEvaluator:
@@ -22,24 +23,32 @@ class StandingCablePressEvaluator:
         self.cooldown_timer = 0
         self.angle_hist = deque(maxlen=5)
 
-        # mediapipe
+        # drawing utils only (safe to keep global)
         self.mp_pose = mp.solutions.pose
-        self.pose = self.mp_pose.Pose(min_detection_confidence=0.7,
-                                      min_tracking_confidence=0.7)
         self.mp_drawing = mp.solutions.drawing_utils
 
     def process(self, frame):
         img = frame.copy()
         h, w = img.shape[:2]
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        res = self.pose.process(rgb)
+
+        # 🔹 Create Pose locally (no global deadlocks)
+        with self.mp_pose.Pose(
+            min_detection_confidence=0.7,
+            min_tracking_confidence=0.7,
+            model_complexity=1,
+            smooth_landmarks=True
+        ) as pose:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            res = pose.process(rgb)
 
         if res.pose_landmarks:
             lm = res.pose_landmarks.landmark
 
             # pick side with better visibility
-            side = 'LEFT' if (lm[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value].visibility >
-                              lm[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value].visibility) else 'RIGHT'
+            side = 'LEFT' if (
+                lm[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value].visibility >
+                lm[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value].visibility
+            ) else 'RIGHT'
 
             s = lm[getattr(self.mp_pose.PoseLandmark, f"{side}_SHOULDER").value]
             e = lm[getattr(self.mp_pose.PoseLandmark, f"{side}_ELBOW").value]
@@ -106,9 +115,11 @@ class StandingCablePressEvaluator:
         self.feedback = "Start pressing..."
         self.angle_hist.clear()
 
+
 # ---------- Streamlit/WebRTC Callback ----------
 _prev_time = time.time()
 cable_press_evaluator = StandingCablePressEvaluator()
+
 
 def cable_press_callback(frame: av.VideoFrame):
     """
@@ -116,23 +127,36 @@ def cable_press_callback(frame: av.VideoFrame):
     Returns (annotated_frame, metrics) where metrics includes reps, feedback, fps.
     """
     global _prev_time
-    img = frame.to_ndarray(format="bgr24")
 
-    # Process with evaluator -> returns annotated frame + metrics
-    annotated, metrics = cable_press_evaluator.process(img)
+    # Convert frame to BGR image
+    img = frame.to_ndarray(format="bgr24")
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    # Pose estimation
+    with get_pose_context(min_detection_confidence=0.5,
+                          min_tracking_confidence=0.5,
+                          model_complexity=0) as pose:
+        res = pose.process(rgb)
+
+    # If pose landmarks are detected, evaluate the exercise
+    if res.pose_landmarks:
+        annotated, metrics = cable_press_evaluator.process(img, res.pose_landmarks)
+    else:
+        annotated = img.copy()
+        metrics = {"reps": 0, "feedback": "No pose detected."}
 
     # FPS calculation
     now = time.time()
     fps = 1.0 / max(1e-6, now - _prev_time)
     _prev_time = now
+
+    # Annotate FPS on frame
     cv2.putText(annotated, f"FPS: {fps:.1f}", (10, 60),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (180, 180, 255), 2)
 
-    # Add FPS to metrics
+    # Update metrics
     metrics["fps"] = fps
-
-    # Make sure reps and feedback always exist
-    metrics["reps"] = metrics.get("reps", 0)
-    metrics["feedback"] = metrics.get("feedback", "Keep going!")
+    metrics.setdefault("reps", 0)
+    metrics.setdefault("feedback", "Keep going!")
 
     return av.VideoFrame.from_ndarray(annotated, format="bgr24"), metrics

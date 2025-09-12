@@ -16,6 +16,8 @@ import numpy as np
 import mediapipe as mp
 from mediapipe.framework.formats import landmark_pb2
 from utils.angle_calculator import angle_3pts, moving_average
+from utils.pose_manager import get_pose_context
+
 
 # =========================
 # PushupEvaluator
@@ -33,19 +35,21 @@ class PushupEvaluator:
         # smoothing
         self.angle_hist = deque(maxlen=smoothing_win)
         self.fps_hist = deque(maxlen=fps_smoothing)
+        self.last_time = time.time()
 
         # mediapipe drawing
         self.mp_drawing = mp.solutions.drawing_utils
         self.landmark_spec = self.mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2, circle_radius=2)
         self.connection_spec = self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2)
 
-    def update_fps(self, fps):
-        try:
-            self.fps_hist.append(float(fps))
-        except Exception:
-            pass
+    def update_fps(self):
+        now = time.time()
+        fps = 1.0 / max(1e-6, now - self.last_time)
+        self.last_time = now
+        self.fps_hist.append(fps)
+        return fps
 
-    def eval_and_draw(self, frame, landmarks):
+    def process(self, frame, landmarks):
         h, w = frame.shape[:2]
 
         try:
@@ -61,7 +65,7 @@ class PushupEvaluator:
         except Exception:
             cv2.putText(frame, "Landmark error", (20, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-            return frame
+            return frame, {"reps": self.reps, "feedback": self.feedback, "fps": 0}
 
         # Convert to pixels
         def to_px(lm): return (lm.x * w, lm.y * h)
@@ -108,7 +112,7 @@ class PushupEvaluator:
         except Exception:
             pass
 
-        # Text overlays
+        # Overlays
         cv2.putText(frame, f"Reps: {self.reps}", (30, 80),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
         cv2.putText(frame, f"Stage: {self.stage}", (30, 130),
@@ -124,11 +128,11 @@ class PushupEvaluator:
             cv2.putText(frame, f"FPS: {fps_avg:.1f}", (w - 140, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 180, 255), 2)
 
-        return frame
+        return frame, {"reps": self.reps, "feedback": self.feedback, "fps": fps_avg or 0}
 
 
 # =========================
-# Globals
+# Global Pose + Evaluator
 # =========================
 _shared_pose = mp.solutions.pose.Pose(
     min_detection_confidence=0.6,
@@ -138,7 +142,6 @@ _shared_pose = mp.solutions.pose.Pose(
 )
 
 pushup_evaluator = PushupEvaluator()
-_prev_time = time.time()
 
 
 # =========================
@@ -146,28 +149,25 @@ _prev_time = time.time()
 # =========================
 def pushup_callback(frame: av.VideoFrame):
     """
-    Returns annotated frame, reps, and feedback
+    WebRTC callback: takes an input frame, returns annotated frame + metrics.
     """
-    global _prev_time
-
     img = frame.to_ndarray(format="bgr24")
     rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     res = _shared_pose.process(rgb)
+     # With this:
+    with get_pose_context(min_detection_confidence=0.5, 
+                         min_tracking_confidence=0.5,
+                         model_complexity=0) as pose:
+        res = pose.process(rgb)
 
     if res.pose_landmarks:
-        img = pushup_evaluator.eval_and_draw(img, res.pose_landmarks.landmark)
+        annotated, metrics = pushup_evaluator.process(img, res.pose_landmarks.landmark)
     else:
         cv2.putText(img, "No person detected", (20, 40),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        metrics = {"reps": pushup_evaluator.reps, "feedback": "No person", "fps": 0}
 
-    # FPS update
-    now = time.time()
-    fps = 1.0 / max(1e-6, now - _prev_time)
-    _prev_time = now
-    pushup_evaluator.update_fps(fps)
+    fps = pushup_evaluator.update_fps()
+    metrics["fps"] = fps
 
-    # Grab current reps + feedback
-    reps = pushup_evaluator.reps
-    feedback = pushup_evaluator.feedback
-
-    return av.VideoFrame.from_ndarray(img, format="bgr24"),{reps, feedback} 
+    return av.VideoFrame.from_ndarray(img, format="bgr24"), metrics
