@@ -236,8 +236,4 @@ def bicep_callback(frame: av.VideoFrame) -> Tuple[av.VideoFrame, Dict]:
     if metrics:
         metrics["fps"] = moving_average(_evaluator.fps_hist)
 
-<<<<<<< HEAD
     return av.VideoFrame.from_ndarray(annotated, format="bgr24"), metrics
-=======
-    return av.VideoFrame.from_ndarray(annotated, format="bgr24"), metrics
->>>>>>> 8e00ac4123b588ae2d2051fdd0407d857a1d46f9
