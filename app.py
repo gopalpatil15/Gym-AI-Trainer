@@ -1,26 +1,35 @@
-import streamlit as st
-from streamlit_webrtc import webrtc_streamer
+import cv2
 import av
 import time
+import streamlit as st
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
+import logging
+import gc
 import random
-import datetime
+from typing import List, Dict, Any
+import asyncio
+import threading
 
-# Import your exercise callbacks
-from exercises.bicep_curl import bicep_callback
+# Configure logging to reduce memory usage
+logging.getLogger("streamlit").setLevel(logging.WARNING)
+logging.getLogger("webrtc").setLevel(logging.WARNING)
+
+# ----------------- Import Callbacks Only -----------------
 from exercises.squat import squat_callback
 from exercises.pushup import pushup_callback
-from exercises.plank import plank_callback
+# from exercises.plank import plank_callback
+from exercises.bicep_curl import bicep_callback
 from exercises.standing_cable_press import cable_press_callback
 
-# Page configuration
+# ----------------- Streamlit Configuration -----------------
 st.set_page_config(
-    page_title="VEER AI",
+    page_title="NEXUS AI TRAINER",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Ultra-modern CSS with cyberpunk aesthetics
+# ----------------- Ultra-Modern Cyberpunk CSS -----------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600;700&family=Audiowide&family=Teko:wght@300;400;500&display=swap');
@@ -71,25 +80,7 @@ st.markdown("""
         100% { transform: translate(50px, 50px); }
     }
     
-    /* Headers with neon glow */
-    h1, h2, h3, h4, h5, h6 {
-        font-family: 'Audiowide', cursive;
-        background: linear-gradient(135deg, #00ffff, #ff00ff, #00ffff);
-        background-size: 200% 200%;
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        animation: neonShift 3s ease infinite;
-        text-transform: uppercase;
-        letter-spacing: 2px;
-    }
-    
-    @keyframes neonShift {
-        0%, 100% { background-position: 0% 50%; }
-        50% { background-position: 100% 50%; }
-    }
-    
-    /* Main title container */
+    /* Hero container */
     .hero-container {
         position: relative;
         text-align: center;
@@ -119,14 +110,27 @@ st.markdown("""
     }
     
     .hero-title {
+        font-family: 'Audiowide', cursive;
         font-size: 4em;
         font-weight: 700;
+        background: linear-gradient(135deg, #00ffff, #ff00ff, #00ffff);
+        background-size: 200% 200%;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        animation: neonShift 3s ease infinite, powerUp 1.5s ease-out;
+        text-transform: uppercase;
+        letter-spacing: 2px;
         text-shadow: 
             0 0 20px rgba(0, 255, 255, 0.8),
             0 0 40px rgba(0, 255, 255, 0.6),
             0 0 60px rgba(0, 255, 255, 0.4);
         margin-bottom: 10px;
-        animation: powerUp 1.5s ease-out;
+    }
+    
+    @keyframes neonShift {
+        0%, 100% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
     }
     
     @keyframes powerUp {
@@ -224,31 +228,6 @@ st.markdown("""
         letter-spacing: 3px;
         position: relative;
         z-index: 2;
-    }
-    
-    /* Exercise selector */
-    .stSelectbox > div > div {
-        background: linear-gradient(135deg, rgba(0, 20, 40, 0.95), rgba(40, 0, 60, 0.95));
-        color: #00ffff;
-        border: 2px solid #00ffff;
-        border-radius: 15px;
-        font-family: 'Rajdhani', sans-serif;
-        font-weight: 600;
-        font-size: 1.1em;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        box-shadow: 
-            0 0 20px rgba(0, 255, 255, 0.4),
-            inset 0 0 10px rgba(0, 255, 255, 0.2);
-        transition: all 0.3s ease;
-    }
-    
-    .stSelectbox > div > div:hover {
-        border-color: #ff00ff;
-        box-shadow: 
-            0 0 30px rgba(255, 0, 255, 0.5),
-            inset 0 0 15px rgba(255, 0, 255, 0.3);
-        transform: translateY(-2px);
     }
     
     /* Section headers */
@@ -382,25 +361,32 @@ st.markdown("""
         box-shadow: 0 5px 30px rgba(255, 0, 255, 0.7);
     }
     
-    .stButton > button::before {
-        content: '';
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        width: 0;
-        height: 0;
-        background: rgba(255, 255, 255, 0.5);
-        border-radius: 50%;
-        transform: translate(-50%, -50%);
-        transition: width 0.6s, height 0.6s;
+    /* Exercise selector */
+    .stSelectbox > div > div {
+        background: linear-gradient(135deg, rgba(0, 20, 40, 0.95), rgba(40, 0, 60, 0.95));
+        color: #00ffff;
+        border: 2px solid #00ffff;
+        border-radius: 15px;
+        font-family: 'Rajdhani', sans-serif;
+        font-weight: 600;
+        font-size: 1.1em;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        box-shadow: 
+            0 0 20px rgba(0, 255, 255, 0.4),
+            inset 0 0 10px rgba(0, 255, 255, 0.2);
+        transition: all 0.3s ease;
     }
     
-    .stButton > button:active::before {
-        width: 300px;
-        height: 300px;
+    .stSelectbox > div > div:hover {
+        border-color: #ff00ff;
+        box-shadow: 
+            0 0 30px rgba(255, 0, 255, 0.5),
+            inset 0 0 15px rgba(255, 0, 255, 0.3);
+        transform: translateY(-2px);
     }
     
-    /* FPS badge */
+    /* FPS indicator */
     .fps-indicator {
         display: inline-block;
         background: linear-gradient(135deg, rgba(0, 255, 0, 0.2), rgba(0, 255, 0, 0.1));
@@ -426,7 +412,7 @@ st.markdown("""
         border-radius: 10px;
         font-family: 'Rajdhani', sans-serif;
         font-weight: 600;
-        color: #00ffff;
+        color: #00ffff !important;
     }
     
     .streamlit-expanderContent {
@@ -434,6 +420,14 @@ st.markdown("""
         border: 1px solid rgba(0, 255, 255, 0.3);
         border-radius: 0 0 10px 10px;
         color: #ffffff;
+    }
+    
+    /* WebRTC container */
+    .stWebrtc {
+        border: 2px solid #00ffff;
+        border-radius: 20px;
+        box-shadow: 0 0 30px rgba(0, 255, 255, 0.5);
+        overflow: hidden;
     }
     
     /* Footer */
@@ -448,6 +442,23 @@ st.markdown("""
         letter-spacing: 2px;
         text-transform: uppercase;
         opacity: 0.8;
+    }
+    
+    /* Data stream animation */
+    .data-stream {
+        position: fixed;
+        right: 0;
+        top: 0;
+        width: 2px;
+        height: 100px;
+        background: linear-gradient(to bottom, transparent, #00ffff, transparent);
+        animation: dataStream 2s linear infinite;
+    }
+    
+    @keyframes dataStream {
+        0% { transform: translateY(100%); opacity: 0; }
+        50% { opacity: 1; }
+        100% { transform: translateY(-100%); opacity: 0; }
     }
     
     /* Mobile optimizations */
@@ -472,46 +483,32 @@ st.markdown("""
         .metrics-grid {
             grid-template-columns: 1fr;
         }
-        
-        .stButton > button {
-            padding: 12px 30px;
-            font-size: 1em;
-        }
-    }
-    
-    /* Loading animation */
-    @keyframes dataStream {
-        0% { transform: translateY(100%); opacity: 0; }
-        50% { opacity: 1; }
-        100% { transform: translateY(-100%); opacity: 0; }
-    }
-    
-    .data-stream {
-        position: fixed;
-        right: 0;
-        top: 0;
-        width: 2px;
-        height: 100px;
-        background: linear-gradient(to bottom, transparent, #00ffff, transparent);
-        animation: dataStream 2s linear infinite;
-    }
-    
-    /* WebRTC container styling */
-    .stWebrtc {
-        border: 2px solid #00ffff;
-        border-radius: 20px;
-        box-shadow: 0 0 30px rgba(0, 255, 255, 0.5);
-        overflow: hidden;
     }
 </style>
 
 <div class="data-stream"></div>
 """, unsafe_allow_html=True)
 
-# Motivational quotes database
-motivational_quotes = [
-    {"text": "YEAH BUDDY, LIGHTWEIGHT BABY!", "author": "Ronnie Coleman"},
-    {"text": "I'LL BE BACK", "author": "The Terminator"},
+# ----------------- Enhanced Motivational Quotes -----------------
+MOTIVATIONAL_QUOTES = [
+    {"text": "YEAH BUDDY! LIGHTWEIGHT BABY!", "author": "Ronnie Coleman"},
+    {"text": "NOTHING BUT A PEANUT!", "author": "Ronnie Coleman"},
+    {"text": "EVERYBODY WANNA BE A BODYBUILDER, BUT NOBODY WANNA LIFT NO HEAVY-ASS WEIGHT!", "author": "Ronnie Coleman"},
+    {"text": "IT'S NOT ABOUT HOW HARD YOU HIT. IT'S ABOUT HOW HARD YOU CAN GET HIT AND KEEP MOVING FORWARD.", "author": "Rocky Balboa"},
+    {"text": "STRENGTH DOES NOT COME FROM WINNING. YOUR STRUGGLES DEVELOP YOUR STRENGTHS.", "author": "Arnold Schwarzenegger"},
+    {"text": "THE LAST THREE OR FOUR REPS IS WHAT MAKES THE MUSCLE GROW.", "author": "Arnold Schwarzenegger"},
+    {"text": "SUCCESS USUALLY COMES TO THOSE WHO ARE TOO BUSY TO BE LOOKING FOR IT.", "author": "Henry David Thoreau"},
+    {"text": "THE ONLY PLACE WHERE SUCCESS COMES BEFORE WORK IS IN THE DICTIONARY.", "author": "Vidal Sassoon"},
+    {"text": "THE HARDER YOU WORK, THE HARDER IT IS TO SURRENDER.", "author": "Vince Lombardi"},
+    {"text": "DON'T STOP WHEN YOU'RE TIRED. STOP WHEN YOU'RE DONE.", "author": "David Goggins"},
+    {"text": "YOUR BODY CAN STAND ALMOST ANYTHING. IT'S YOUR MIND THAT YOU HAVE TO CONVINCE.", "author": "Unknown Warrior"},
+    {"text": "THE PAIN YOU FEEL TODAY WILL BE THE STRENGTH YOU FEEL TOMORROW.", "author": "Ancient Proverb"},
+    {"text": "GO THE EXTRA MILE. IT'S NEVER CROWDED.", "author": "Wayne Dyer"},
+    {"text": "GOOD THINGS COME TO THOSE WHO SWEAT.", "author": "Gym Oracle"},
+    {"text": "IF IT DOESN'T CHALLENGE YOU, IT DOESN'T CHANGE YOU.", "author": "Fred DeVito"},
+    {"text": "SWEAT IS JUST FAT CRYING.", "author": "Gym Wisdom"},
+    {"text": "THE ONLY BAD WORKOUT IS THE ONE THAT DIDN'T HAPPEN.", "author": "Unknown"},
+    {"text": "TRAIN LIKE A BEAST, LOOK LIKE A BEAUTY.", "author": "Gym Mantra"},
     {"text": "CONQUER FROM WITHIN", "author": "Unknown Warrior"},
     {"text": "PAIN IS TEMPORARY, GLORY IS FOREVER", "author": "Ancient Proverb"},
     {"text": "THE BODY ACHIEVES WHAT THE MIND BELIEVES", "author": "Neural Network"},
@@ -521,20 +518,20 @@ motivational_quotes = [
 ]
 
 # Initialize session state
-if "current_quote" not in st.session_state:
-    st.session_state.current_quote = random.choice(motivational_quotes)
-if "workout_start_time" not in st.session_state:
+if 'current_quote' not in st.session_state:
+    st.session_state.current_quote = random.choice(MOTIVATIONAL_QUOTES)
+if 'workout_start_time' not in st.session_state:
     st.session_state.workout_start_time = time.time()
 
-# Hero section
+# ----------------- Hero Section -----------------
 st.markdown("""
 <div class="hero-container">
-    <h1 class="hero-title">⚡VEER AI ⚡</h1>
-    <p class="hero-subtitle">VEER Exercise System</p>
+    <h1 class="hero-title">⚡ NEXUS AI TRAINER ⚡</h1>
+    <p class="hero-subtitle">Neural Exercise Evaluation System</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Motivational quote display
+# ----------------- Motivational Quote Display -----------------
 quote = st.session_state.current_quote
 st.markdown(f"""
 <div class="motivation-card">
@@ -543,70 +540,112 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Exercise selection
+# ----------------- Exercise Selection -----------------
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     st.markdown('<div class="section-header">⚡ TRAINING MODULE ⚡</div>', unsafe_allow_html=True)
     exercise_choice = st.selectbox(
         "Choose your exercise:",
-        ("Bicep Curl", "Squat", "Pushup", "Plank", "Standing Cable Press"),
+        ["Squat", "Pushup", "Bicep Curl", "Standing Cable Press"],
         label_visibility="collapsed"
     )
 
-# Combined callback function
-def combined_callback(frame: av.VideoFrame):
-    if exercise_choice == "Bicep Curl":
-        return bicep_callback(frame)
-    elif exercise_choice == "Squat":
-        return squat_callback(frame)
-    elif exercise_choice == "Pushup":
-        return pushup_callback(frame)
-    elif exercise_choice == "Plank":
-        return plank_callback(frame)
-    elif exercise_choice == "Standing Cable Press":
-        return cable_press_callback(frame)
-    else:
-        img = frame.to_ndarray(format="bgr24")
-        return av.VideoFrame.from_ndarray(img, format="bgr24"), {"reps":0, "feedback":"System Ready", "fps":0}
+# Map choices to callbacks
+EXERCISE_MAP = {
+    "Squat": squat_callback,
+    "Pushup": pushup_callback,
+    "Bicep Curl": bicep_callback,
+    "Standing Cable Press": cable_press_callback,
+}
 
-# Video streamer
+# ----------------- Optimized Video Processor -----------------
+class WorkoutProcessor(VideoProcessorBase):
+    def __init__(self, exercise_name):
+        super().__init__()
+        self.exercise_name = exercise_name
+        self.callback = EXERCISE_MAP[exercise_name]
+        self.latest_metrics = {"reps": 0, "feedback": "Neural Link Initializing...", "fps": 0}
+        self.frame_count = 0
+        self.skip_frames = 3  # Process every 4th frame
+        self.last_gc = time.time()
+        self.last_feedback_time = 0
+        self.feedback_cooldown = 3
+        
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        try:
+            # Skip frames for performance
+            self.frame_count += 1
+            if self.frame_count % self.skip_frames != 0:
+                return frame
+            
+            # Process frame with callback
+            processed_frame, metrics = self.callback(frame)
+            
+            # Update metrics
+            if metrics:
+                current_time = time.time()
+                if ("feedback" in metrics and 
+                    (current_time - self.last_feedback_time > self.feedback_cooldown or 
+                     "good" not in metrics["feedback"].lower())):
+                    self.latest_metrics.update(metrics)
+                    self.last_feedback_time = current_time
+                else:
+                    reps = metrics.get("reps", self.latest_metrics["reps"])
+                    fps = metrics.get("fps", self.latest_metrics["fps"])
+                    self.latest_metrics.update({"reps": reps, "fps": fps})
+            
+            # Garbage collection
+            current_time = time.time()
+            if current_time - self.last_gc > 5:
+                gc.collect()
+                self.last_gc = current_time
+                
+            return processed_frame
+            
+        except Exception as e:
+            st.error(f"Processing error: {str(e)}")
+            return frame
+
+# ----------------- Video Streamer -----------------
 st.markdown('<div class="section-header">📡 MOTION CAPTURE INTERFACE 📡</div>', unsafe_allow_html=True)
+
 webrtc_ctx = webrtc_streamer(
-    key="nexus-trainer",
-    video_frame_callback=combined_callback,
-    media_stream_constraints={"video": True, "audio": False},
+    key=f"nexus-trainer-{exercise_choice.lower().replace(' ', '_')}",
+    mode=WebRtcMode.SENDRECV,
+    video_processor_factory=lambda: WorkoutProcessor(exercise_choice),
+    media_stream_constraints={
+        "video": {
+            "width": {"ideal": 320},
+            "height": {"ideal": 240},
+            "frameRate": {"ideal": 10, "max": 15}
+        },
+        "audio": False
+    },
+    async_processing=True,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
 
-# Performance metrics
+# ----------------- Performance Metrics Display -----------------
 st.markdown('<div class="section-header">⚡ PERFORMANCE ANALYTICS ⚡</div>', unsafe_allow_html=True)
-metrics_placeholder = st.empty()
-
-# Initialize metrics
-if "latest_metrics" not in st.session_state:
-    st.session_state.latest_metrics = {"reps":0, "feedback":"Awaiting Neural Link...", "fps":0}
-
-# Update metrics in real-time
-if webrtc_ctx.video_transformer:
-    import threading
-    
-    def metrics_updater():
-        while webrtc_ctx.state.playing:
-            if hasattr(webrtc_ctx.video_transformer, "latest_metrics"):
-                st.session_state.latest_metrics = webrtc_ctx.video_transformer.latest_metrics
-            time.sleep(0.1)
-    
-    threading.Thread(target=metrics_updater, daemon=True).start()
-
-# Display metrics
-metrics = st.session_state.get("latest_metrics", {"reps":0, "feedback":"System Initializing...", "fps":0})
 
 # Calculate workout duration
 workout_duration = int(time.time() - st.session_state.workout_start_time)
 duration_min = workout_duration // 60
 duration_sec = workout_duration % 60
 
-# Metrics HTML
+# Create metrics placeholder
+metrics_placeholder = st.empty()
+
+# Update metrics display
+if webrtc_ctx.video_processor:
+    try:
+        metrics = webrtc_ctx.video_processor.latest_metrics
+    except:
+        metrics = {"reps": 0, "feedback": "System Initializing...", "fps": 0}
+else:
+    metrics = {"reps": 0, "feedback": "Awaiting Neural Link...", "fps": 0}
+
+# Display metrics with cyberpunk style
 metrics_html = f"""
 <div class="metrics-container">
     <div class="metrics-grid">
@@ -634,14 +673,14 @@ metrics_html = f"""
 
 metrics_placeholder.markdown(metrics_html, unsafe_allow_html=True)
 
-# Control buttons
+# ----------------- Control Buttons -----------------
 col1, col2, col3 = st.columns([1, 1, 1])
 with col2:
     if st.button("🔄 RECHARGE MOTIVATION", use_container_width=True):
-        st.session_state.current_quote = random.choice(motivational_quotes)
+        st.session_state.current_quote = random.choice(MOTIVATIONAL_QUOTES)
         st.rerun()
 
-# Tips section
+# ----------------- Instructions & Tips -----------------
 with st.expander("📱 OPTIMIZATION PROTOCOLS"):
     st.markdown("""
     **SYSTEM REQUIREMENTS:**
@@ -658,23 +697,39 @@ with st.expander("📱 OPTIMIZATION PROTOCOLS"):
     - Maintain consistent form throughout
     """)
 
-# Advanced stats expander
-with st.expander("📊 ADVANCED ANALYTICS"):
-    st.markdown(f"""
-    **SESSION STATISTICS:**
-    - Total Reps: **{metrics['reps']}**
-    - Average RPM: **{metrics['reps'] / max(1, workout_duration/60):.1f}**
-    - Current Exercise: **{exercise_choice}**
-    - Frame Rate: **{metrics['fps']:.1f} FPS**
-    - Session Duration: **{duration_min:02d}:{duration_sec:02d}**
-    
-    **PERFORMANCE GRADE:** {'⭐' * min(5, max(1, metrics['reps'] // 10))}
-    """)
-
-# Footer
-st.markdown("---")
-st.markdown("""
-<div class="footer">
-    POWERED BY NEURAL MOTION TRACKING | VEER AI © 2025 | VERSION 4.0.1
-</div>
-""", unsafe_allow_html=True)
+with st.expander("🎯 EXERCISE INSTRUCTIONS"):
+    if exercise_choice == "Squat":
+        st.markdown("""
+        **SQUAT PROTOCOL:**
+        - Stand with feet shoulder-width apart
+        - Keep your back straight and chest up
+        - Lower your body until thighs are parallel to the ground
+        - Push through your heels to return to starting position
+        """)
+    elif exercise_choice == "Pushup":
+        st.markdown("""
+        **PUSHUP PROTOCOL:**
+        - Start in plank position with hands slightly wider than shoulders
+        - Lower your body until chest nearly touches the ground
+        - Keep your body in a straight line
+        - Push back up to starting position
+        """)
+    elif exercise_choice == "Bicep Curl":
+        st.markdown("""
+        **BICEP CURL PROTOCOL:**
+        - Stand with arms at your sides
+        - Curl your arm up towards your shoulder
+        - Keep your elbows close to your body
+        - Slowly lower back to starting position
+        - Maintain controlled movement throughout
+        """)
+    elif exercise_choice == "Standing Cable Press":
+        st.markdown("""
+        **STANDING CABLE PRESS PROTOCOL:**
+        - Stand with feet shoulder-width apart
+        - Keep your core engaged and back straight
+        - Press the cable forward at chest level
+        - Extend your arms fully without locking elbows
+        - Slowly return to starting position
+        - Maintain tension throughout the movement
+        """)
