@@ -23,7 +23,7 @@ from exercises.standing_cable_press import cable_press_callback
 
 # ----------------- Streamlit Configuration -----------------
 st.set_page_config(
-    page_title="NEXUS AI TRAINER",
+    page_title="GYM AI TRAINER",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
