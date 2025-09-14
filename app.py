@@ -526,7 +526,7 @@ if 'workout_start_time' not in st.session_state:
 # ----------------- Hero Section -----------------
 st.markdown("""
 <div class="hero-container">
-    <h1 class="hero-title">⚡ NEXUS AI TRAINER ⚡</h1>
+    <h1 class="hero-title">⚡ GYM AI TRAINER ⚡</h1>
     <p class="hero-subtitle">Neural Exercise Evaluation System</p>
 </div>
 """, unsafe_allow_html=True)
