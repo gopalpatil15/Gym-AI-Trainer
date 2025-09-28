@@ -1,11 +1,10 @@
-
-https://github.com/user-attachments/assets/85dc03d6-c22f-48bf-9daa-c9ac0dd26a70
+https://github.com/user-attachments/assets/cc3bc34a-1a1f-4d6d-b7dc-71ab52f062a1
 # AI Gym Trainer
 
 An AI-powered personal trainer that evaluates your exercise form in **real-time** using OpenCV, MediaPipe, and streamlit.  
 Supports multiple exercises with **reps counting, posture correction, and voice feedback**.
 
-## 🚀 Features
+##  Features
 - Real-time form evaluation via webcam
 - Automatic rep counting
 - Voice feedback for corrections
@@ -17,19 +16,25 @@ Supports multiple exercises with **reps counting, posture correction, and voice 
   - Squat
   - Standing Cable Press (experimental)
 
-## 📂 Project Structure
+##  Project Structure
 ```
-.
-├── app.py               # streamlit main app
-├── bicep_curl.py        # Bicep Curl evaluator
-├── squat.py             # Squat evaluator
-├── plank.py             # Plank evaluator
-├── pushup.py            # Push-up evaluator
+Gym-AI-Trainer/
+├── app.py                     # Main Streamlit app
+├── streamlit_app.py           # Optional alternate entry point
+├── exercises/                 # Individual exercise evaluators
+│   ├── bicep_curl.py          # Bicep Curl evaluator
+│   ├── squat.py               # Squat evaluator
+│   ├── plank.py               # Plank evaluator
+│   ├── pushup.py              # Push-up evaluator
+│   └── press.py               # Standing Cable Press (experimental)
 ├── utils/
-│   └── angle_calculator.py   # Utility for angle calculations
+│   └── angle_calculator.py    # Utility for angle calculations
+├── requirements.txt
+├── LICENSE
+└── README.md
 ```
 
-## 🛠️ Installation
+## Installation
 ```bash
 git clone https://github.com/yourusername/ai-gym-trainer.git
 cd ai-gym-trainer
@@ -44,7 +49,7 @@ pip install -r requirements.txt
 - numpy==1.26.0
 - av==11.1.03
 
-## ▶️ Usage
+## Usage
 
 ### 1. Run with streamlit UI
 ```bash
@@ -83,10 +88,11 @@ python main.py --exercise plank --src 0
    - Provides **real-time feedback** (text + voice).
 
 5. **UI / Deployment**  
-   - **streamlit** interface for easy usage in browser.  
-   - Supports:
-     - **Webcam streaming** (real-time feedback)  
-     - **Video upload** (process & review form)  
+   - **Streamlit interface** for browser-based usage  
+   - **Webcam streaming** for real-time exercise evaluation  
+   - **Video upload support** to process and review past workouts  
+   - **Unified CLI runner** to execute any exercise directly from the terminal  
+
 
 ### 🔗 Workflow Diagram
 ```
