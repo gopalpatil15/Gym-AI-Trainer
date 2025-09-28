@@ -5,4 +5,4 @@ mediapipe==0.10.21
 av==10.0.0
 numpy==1.24.3
 Pillow==10.0.1
-protobuf==3.20.3
+protobuf==4.25.3
