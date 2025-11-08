@@ -1,103 +1,175 @@
-https://github.com/user-attachments/assets/cc3bc34a-1a1f-4d6d-b7dc-71ab52f062a1
-# AI Gym Trainer
+# 🏋️‍♂️ AI Gym Trainer
 
-An AI-powered personal trainer that evaluates your exercise form in **real-time** using OpenCV, MediaPipe, and streamlit.  
-Supports multiple exercises with **reps counting, posture correction, and voice feedback**.
+An **AI-powered personal trainer** that evaluates your exercise form in **real-time** using **OpenCV**, **MediaPipe**, and **Streamlit**.  
+It detects posture, counts reps, and gives contextual voice feedback — helping you improve your form instantly.
 
-##  Features
-- Real-time form evaluation via webcam
-- Automatic rep counting
-- Voice feedback for corrections
-- Video upload support
-- Supports multiple exercises:
-  - Bicep Curl
-  - Push-up
-  - Plank
-  - Squat
-  - Standing Cable Press (experimental)
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/cc3bc34a-1a1f-4d6d-b7dc-71ab52f062a1">
+</p>
 
-##  Project Structure
+---
+
+## 🌟 Highlights
+- Real-time **form evaluation** via webcam
+- **Automatic rep counting** with precise motion tracking
+- **Voice feedback** for corrections (e.g., “go deeper”, “balance knee”)
+- **Video upload support** for post-workout review
+- **Multi-exercise support** with modular design:
+  - 🏋️‍♀️ Bicep Curl  
+  - 🤸 Push-up  
+  - 🧘 Plank  
+  - 🦵 Squat *(flagship demo)*  
+  - 💪 Standing Cable Press *(experimental)*
+
+---
+
+## 🧠 Tech Stack
+| Category | Technologies |
+|-----------|---------------|
+| Programming | Python 3.10 |
+| Frontend UI | Streamlit, Streamlit-WebRTC |
+| Computer Vision | OpenCV, MediaPipe Pose |
+| Math & Utilities | NumPy |
+| Audio Feedback | pyttsx3 |
+| Deployment | Streamlit Cloud / Hugging Face Spaces |
+
+---
+
+## 📁 Project Structure
 ```
+
 Gym-AI-Trainer/
 ├── app.py                     # Main Streamlit app
-├── streamlit_app.py           # Optional alternate entry point
+├── streamlit_app.py           # Alternate entry point (optional)
 ├── exercises/                 # Individual exercise evaluators
-│   ├── bicep_curl.py          # Bicep Curl evaluator
-│   ├── squat.py               # Squat evaluator
-│   ├── plank.py               # Plank evaluator
-│   ├── pushup.py              # Push-up evaluator
-│   └── press.py               # Standing Cable Press (experimental)
+│   ├── bicep_curl.py
+│   ├── squat.py
+│   ├── plank.py
+│   ├── pushup.py
+│   └── press.py
 ├── utils/
-│   └── angle_calculator.py    # Utility for angle calculations
+│   └── angle_calculator.py    # Angle calculation helpers
 ├── requirements.txt
 ├── LICENSE
 └── README.md
-```
 
-## Installation
+````
+
+---
+
+## ⚙️ Installation
 ```bash
-git clone https://github.com/yourusername/ai-gym-trainer.git
-cd ai-gym-trainer
+git clone https://github.com/gopalpatil15/Gym-AI-Trainer.git
+cd Gym-AI-Trainer
 pip install -r requirements.txt
-```
+````
 
-### Requirements
-- streamlit==1.30.0
-- streamlit-webrtc==0.51.0
-- mediapipe==1.10.10
-- opencv-python==4.8.0.74
-- numpy==1.26.0
-- av==11.1.03
+### 🧩 Requirements
 
-## Usage
+* streamlit==1.30.0
+* streamlit-webrtc==0.51.0
+* mediapipe==1.10.10
+* opencv-python==4.8.0.74
+* numpy==1.26.0
+* av==11.1.03
 
-### 1. Run with streamlit UI
+---
+
+## 🚀 Usage
+
+### 1️⃣ Run via Streamlit (recommended)
+
 ```bash
 streamlit run app.py
 ```
-Open browser at: [http://localhost:7860](http://localhost:7860)
 
-### 2. Run specific exercise (CLI runner)
+After launching, open the URL shown in your terminal (default: [http://localhost:8501](http://localhost:8501)).
 
-Run any exercise directly with the unified runner:
+### 2️⃣ Run specific exercise (CLI mode)
+
+You can also run individual exercises directly:
 
 ```bash
-python main.py --exercise pushup --src 0
 python main.py --exercise squat --src 0
+python main.py --exercise pushup --src 0
 python main.py --exercise curl --src 0
 python main.py --exercise press --src 0
 python main.py --exercise plank --src 0
 ```
 
-## 🔎 How It Works (Project Logic)
+---
 
-1. **Pose Detection**  
-   - Uses **MediaPipe Pose** to detect body landmarks (shoulders, elbows, hips, knees, ankles).  
-   - Converts webcam/video frames into normalized keypoints.
+## 🔍 How It Works
 
-2. **Angle Calculation**  
-   - Custom `angle_3pts` function computes joint angles (e.g., elbow for curls, knees for squats).  
-   - Uses these angles to decide form correctness.
+1. **Pose Detection**
+   Uses **MediaPipe Pose** to detect body landmarks (shoulders, elbows, hips, knees, ankles) from webcam or video input.
 
-3. **Repetition Counting**  
-   - Each exercise has a **state machine** (`up` → `down` → `up`).  
-   - A rep is counted when the motion completes correctly.
+2. **Angle Calculation**
+   Custom `angle_3pts()` function computes key joint angles and detects motion patterns.
 
-4. **Form Evaluation & Feedback**  
-   - Checks posture (e.g., shoulders level in squats, hips alignment in planks).  
-   - Provides **real-time feedback** (text + voice).
+3. **Repetition Counting**
+   Each exercise uses a **finite-state machine** (`up → down → up`) to detect complete, valid reps.
 
-5. **UI / Deployment**  
-   - **Streamlit interface** for browser-based usage  
-   - **Webcam streaming** for real-time exercise evaluation  
-   - **Video upload support** to process and review past workouts  
-   - **Unified CLI runner** to execute any exercise directly from the terminal  
+4. **Form Evaluation & Feedback**
+   Evaluates alignment and posture in real time and provides context-aware feedback (text + voice).
+   Example: “Balance knee,” “Shoulder straight,” or “Go deeper.”
 
+5. **UI & Video Handling**
+   The **Streamlit** interface supports live webcam input and video upload for playback and analysis.
 
-### 🔗 Workflow Diagram
+---
+
+## 🧭 System Workflow
+
 ```
-Webcam/Video → MediaPipe Pose → Landmark Angles → Evaluator Logic → Reps + Feedback → streamlit UI
+Webcam / Video
+      ↓
+ MediaPipe Pose
+      ↓
+ Landmark Angles
+      ↓
+ Evaluator Logic (State Machine)
+      ↓
+ Rep Counting + Feedback
+      ↓
+ Streamlit UI (Text + Voice)
 ```
+
+---
+
+## 🎥 Demo
+
+> 🔗 [Watch the Demo Video](https://github.com/user-attachments/assets/cc3bc34a-1a1f-4d6d-b7dc-71ab52f062a1)
+
+*(Shows live squat feedback and automatic rep counting on CPU — no GPU required.)*
+
+---
+
+## 🚧 Future Improvements
+
+* Personalized correction model using per-user history
+* Memory system to track common form errors
+* AI-based rep classification and self-learning correction logic
+* Improved voice feedback with contextual suggestions
+* Mobile-friendly deployment with on-device inference
+
+---
 
 ## 📜 License
-MIT License
+
+This project is licensed under the **MIT License** — free for personal and educational use.
+
+---
+
+## 🙌 Author
+
+**Gopal Patil**
+AI/ML & Computer Vision Developer
+[GitHub Profile](https://github.com/gopalpatil15)
+
+---
+
+> 💡 *“A good rep feels smooth. A great model makes it smoother.”*
+
+```
+
