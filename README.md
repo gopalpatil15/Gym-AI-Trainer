@@ -4,7 +4,7 @@ An **AI-powered personal trainer** that evaluates your exercise form in **real-t
 It detects posture, counts reps, and gives contextual voice feedback — helping you improve your form instantly.
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/cc3bc34a-1a1f-4d6d-b7dc-71ab52f062a1">
+   <img src="https://github.com/user-attachments/assets/cc3bc34a-1a1f-4d6d-b7dc-71ab52f062a1" width="650" alt="AI Gym Trainer Demo">
 </p>
 
 ---
