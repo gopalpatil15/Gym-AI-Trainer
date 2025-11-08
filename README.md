@@ -171,5 +171,3 @@ AI/ML & Computer Vision Developer
 
 > 💡 *“A good rep feels smooth. A great model makes it smoother.”*
 
-```
-
